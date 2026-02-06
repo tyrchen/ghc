@@ -4,8 +4,11 @@
 //! with line number ranges (e.g., `main.go:10-20`), issues/PRs by number,
 //! and commits by SHA.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use clap::Args;
+use serde_json::Value;
 
 use ghc_core::{ios_eprintln, ios_println};
 
@@ -74,7 +77,6 @@ impl BrowseArgs {
     /// # Errors
     ///
     /// Returns an error if the URL cannot be determined or browser cannot be opened.
-    #[allow(clippy::unused_async)]
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let repo_str = self
             .repo
@@ -86,7 +88,15 @@ impl BrowseArgs {
 
         let base_url = format!("https://{}/{}/{}", repo.host(), repo.owner(), repo.name());
 
-        let section = self.parse_section(&base_url)?;
+        // Fetch the default branch if we need it (file location without explicit branch)
+        let default_branch =
+            if self.location.is_some() && self.branch.is_none() && self.commit.is_none() {
+                self.fetch_default_branch(factory, &repo).await.ok()
+            } else {
+                None
+            };
+
+        let section = self.parse_section(default_branch.as_deref())?;
         let url = if section.is_empty() {
             base_url
         } else {
@@ -105,8 +115,33 @@ impl BrowseArgs {
         Ok(())
     }
 
+    /// Fetch the repository's default branch name.
+    async fn fetch_default_branch(
+        &self,
+        factory: &crate::factory::Factory,
+        repo: &ghc_core::repo::Repo,
+    ) -> Result<String> {
+        let client = factory.api_client(repo.host())?;
+        let mut variables = HashMap::new();
+        variables.insert("owner".to_string(), Value::String(repo.owner().to_string()));
+        variables.insert("name".to_string(), Value::String(repo.name().to_string()));
+
+        let data: Value = client
+            .graphql(
+                "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { defaultBranchRef { name } } }",
+                &variables,
+            )
+            .await
+            .context("failed to fetch default branch")?;
+
+        data.pointer("/repository/defaultBranchRef/name")
+            .and_then(Value::as_str)
+            .map(String::from)
+            .ok_or_else(|| anyhow::anyhow!("could not determine default branch"))
+    }
+
     /// Parse the URL section based on flags and location argument.
-    fn parse_section(&self, _base_url: &str) -> Result<String> {
+    fn parse_section(&self, default_branch: Option<&str>) -> Result<String> {
         // Section flags take priority
         if self.settings {
             return Ok("settings".to_string());
@@ -164,7 +199,7 @@ impl BrowseArgs {
         // Parse file path with optional line range (file.go:10 or file.go:10-20)
         let (file_path, range_start, range_end) = parse_file_location(&location)?;
 
-        let ref_name = git_ref.unwrap_or_else(|| "HEAD".to_string());
+        let ref_name = git_ref.unwrap_or_else(|| default_branch.unwrap_or("HEAD").to_string());
 
         if range_start > 0 {
             let range_fragment = if range_end > 0 && range_start != range_end {
