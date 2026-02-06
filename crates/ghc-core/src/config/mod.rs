@@ -169,6 +169,8 @@ pub fn cache_dir() -> std::path::PathBuf {
 }
 
 /// Known configuration keys with descriptions and allowed values.
+///
+/// Matches the Go CLI's config option list in order.
 pub static CONFIG_OPTIONS: &[ConfigOption] = &[
     ConfigOption {
         key: "git_protocol",
@@ -189,8 +191,20 @@ pub static CONFIG_OPTIONS: &[ConfigOption] = &[
         default_value: "enabled",
     },
     ConfigOption {
+        key: "prefer_editor_prompt",
+        description: "toggle preference for editor-based interactive prompting in the terminal",
+        allowed_values: &["enabled", "disabled"],
+        default_value: "disabled",
+    },
+    ConfigOption {
         key: "pager",
         description: "the terminal pager program to send standard output to",
+        allowed_values: &[],
+        default_value: "",
+    },
+    ConfigOption {
+        key: "http_unix_socket",
+        description: "the path to a Unix domain socket through which to make an HTTP connection",
         allowed_values: &[],
         default_value: "",
     },
@@ -201,10 +215,28 @@ pub static CONFIG_OPTIONS: &[ConfigOption] = &[
         default_value: "",
     },
     ConfigOption {
-        key: "http_unix_socket",
-        description: "the path to a Unix domain socket through which to make an HTTP connection",
-        allowed_values: &[],
-        default_value: "",
+        key: "color_labels",
+        description: "whether to display labels using RGB hex color codes in terminals that support truecolor",
+        allowed_values: &["enabled", "disabled"],
+        default_value: "disabled",
+    },
+    ConfigOption {
+        key: "accessible_colors",
+        description: "whether customizable, 4-bit accessible colors should be used",
+        allowed_values: &["enabled", "disabled"],
+        default_value: "disabled",
+    },
+    ConfigOption {
+        key: "accessible_prompter",
+        description: "whether an accessible prompter should be used",
+        allowed_values: &["enabled", "disabled"],
+        default_value: "disabled",
+    },
+    ConfigOption {
+        key: "spinner",
+        description: "whether to use an animated spinner as a progress indicator",
+        allowed_values: &["enabled", "disabled"],
+        default_value: "enabled",
     },
 ];
 
@@ -233,7 +265,10 @@ impl ConfigOption {
 pub fn default_for_key(key: &str) -> &str {
     match key {
         "git_protocol" => "https",
-        "prompt" => "enabled",
+        "prompt" | "spinner" => "enabled",
+        "prefer_editor_prompt" | "color_labels" | "accessible_colors" | "accessible_prompter" => {
+            "disabled"
+        }
         _ => "",
     }
 }
@@ -249,9 +284,14 @@ mod tests {
     #[case("git_protocol", "https")]
     #[case("editor", "")]
     #[case("prompt", "enabled")]
+    #[case("prefer_editor_prompt", "disabled")]
     #[case("pager", "")]
     #[case("browser", "")]
     #[case("http_unix_socket", "")]
+    #[case("color_labels", "disabled")]
+    #[case("accessible_colors", "disabled")]
+    #[case("accessible_prompter", "disabled")]
+    #[case("spinner", "enabled")]
     #[case("unknown_key", "")]
     #[case("", "")]
     fn test_should_return_defaults(#[case] key: &str, #[case] expected: &str) {

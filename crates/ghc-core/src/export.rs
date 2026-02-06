@@ -91,7 +91,12 @@ pub fn apply_template(value: &Value, template: &str) -> Result<String> {
             let expr = template[start..end].trim();
             pos = end + 2;
 
-            if let Some(range_expr) = expr.strip_prefix("range ") {
+            if expr.starts_with('"') && expr.ends_with('"') {
+                // Go-style string literal: {{"\n"}} → newline, {{"\t"}} → tab
+                let inner = &expr[1..expr.len() - 1];
+                let unescaped = unescape_go_string(inner);
+                output.push_str(&unescaped);
+            } else if let Some(range_expr) = expr.strip_prefix("range ") {
                 // Handle {{range .field}}...{{end}}
                 let field_path = range_expr.trim();
                 let arr_val = resolve_path(value, field_path)?;
@@ -143,6 +148,30 @@ pub fn apply_template(value: &Value, template: &str) -> Result<String> {
     }
 
     Ok(output)
+}
+
+/// Unescape a Go string literal, handling common escape sequences.
+fn unescape_go_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('\\') | None => result.push('\\'),
+                Some('"') => result.push('"'),
+                Some('r') => result.push('\r'),
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 /// Resolve a dotted path like `.field.subfield` on a JSON value.
@@ -305,5 +334,19 @@ mod tests {
         let val = json!("hello");
         let result = apply_template(&val, "{{.}}").unwrap();
         assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_should_apply_template_go_string_escape_newline() {
+        let val = json!({"items": [{"name": "a"}, {"name": "b"}]});
+        let result = apply_template(&val, "{{range .items}}{{.name}}{{\"\\n\"}}{{end}}").unwrap();
+        assert_eq!(result, "a\nb\n");
+    }
+
+    #[test]
+    fn test_should_apply_template_go_string_escape_tab() {
+        let val = json!({"a": 1});
+        let result = apply_template(&val, "hello{{\"\\t\"}}world{{\"\\n\"}}").unwrap();
+        assert_eq!(result, "hello\tworld\n");
     }
 }

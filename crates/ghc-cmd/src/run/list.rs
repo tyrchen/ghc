@@ -173,22 +173,24 @@ impl ListArgs {
                 continue;
             }
 
-            let status_display = match (status, conclusion) {
-                (_, "success") => cs.success("completed"),
-                (_, "failure") => cs.error("failed"),
-                (_, "cancelled") => cs.gray("cancelled"),
-                (_, "skipped") => cs.gray("skipped"),
-                ("in_progress", _) => cs.warning("in progress"),
-                ("queued", _) => cs.gray("queued"),
-                ("waiting", _) => cs.gray("waiting"),
-                _ => status.to_string(),
+            let (symbol, conclusion_display) = match (status, conclusion) {
+                (_, "success") => (cs.success("\u{2713}"), cs.success("success")),
+                (_, "failure") => (cs.error("X"), cs.error("failure")),
+                (_, "cancelled") => (cs.gray("-"), cs.gray("cancelled")),
+                (_, "skipped") => (cs.gray("-"), cs.gray("skipped")),
+                (_, "neutral") => (cs.gray("-"), cs.gray("neutral")),
+                ("in_progress", _) => (cs.warning("*"), cs.warning("in_progress")),
+                ("queued", _) => (cs.gray("*"), cs.gray("queued")),
+                ("waiting", _) => (cs.gray("*"), cs.gray("waiting")),
+                _ => (status.to_string(), conclusion.to_string()),
             };
 
             let elapsed = format_elapsed(created_at, updated_at);
             let age = format_age(created_at);
 
             tp.add_row(vec![
-                status_display,
+                symbol,
+                conclusion_display,
                 cs.bold(display_title),
                 name.to_string(),
                 branch.to_string(),

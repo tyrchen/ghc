@@ -31,6 +31,17 @@ pub fn filter_json_fields(value: &Value, fields: &[String]) -> Value {
             for field in fields {
                 if let Some(v) = map.get(field) {
                     filtered.insert(field.clone(), v.clone());
+                } else {
+                    // Try alternate casing: camelCase <-> snake_case
+                    let snake = to_snake_case(field);
+                    if let Some(v) = map.get(&snake) {
+                        filtered.insert(field.clone(), v.clone());
+                    } else {
+                        let camel = to_camel_case(field);
+                        if let Some(v) = map.get(&camel) {
+                            filtered.insert(field.clone(), v.clone());
+                        }
+                    }
                 }
             }
             Value::Object(filtered)
@@ -42,6 +53,43 @@ pub fn filter_json_fields(value: &Value, fields: &[String]) -> Value {
         ),
         other => other.clone(),
     }
+}
+
+/// Convert a `camelCase` string to `snake_case`.
+fn to_snake_case(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            for lower in ch.to_lowercase() {
+                result.push(lower);
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// Convert a `snake_case` string to `camelCase`.
+fn to_camel_case(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut capitalize_next = false;
+    for ch in s.chars() {
+        if ch == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            for upper in ch.to_uppercase() {
+                result.push(upper);
+            }
+            capitalize_next = false;
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 /// Format a filtered JSON value as a pretty-printed string.
@@ -134,6 +182,23 @@ mod tests {
         let data = json!("plain string");
         let filtered = filter_json_fields(&data, &["field".to_string()]);
         assert_eq!(filtered, data);
+    }
+
+    #[test]
+    fn test_should_alias_camel_case_to_snake_case() {
+        let data = json!({"tag_name": "v1.0", "created_at": "2024-01-01"});
+        let filtered = filter_json_fields(&data, &["tagName".to_string(), "createdAt".to_string()]);
+        assert_eq!(
+            filtered,
+            json!({"tagName": "v1.0", "createdAt": "2024-01-01"})
+        );
+    }
+
+    #[test]
+    fn test_should_alias_snake_case_to_camel_case() {
+        let data = json!({"tagName": "v1.0", "isDraft": false});
+        let filtered = filter_json_fields(&data, &["tag_name".to_string(), "is_draft".to_string()]);
+        assert_eq!(filtered, json!({"tag_name": "v1.0", "is_draft": false}));
     }
 
     #[test]
