@@ -23,46 +23,58 @@ doc_markdown = "allow"
 
 [workspace.dependencies]
 # Core
-anyhow = "~1.0"
-thiserror = "~2.0"
-serde = { version = "~1.0", features = ["derive"] }
-serde_json = "~1.0"
-serde_yaml = "~0.9"
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
 
 # Async
-tokio = { version = "~1.43", features = ["rt-multi-thread", "macros", "process", "signal", "fs", "io-util", "time"] }
+tokio = { version = "1.49", features = [
+  "rt-multi-thread",
+  "macros",
+  "process",
+  "signal",
+  "fs",
+  "io-util",
+  "time",
+] }
 
 # CLI
-clap = { version = "~4.5", features = ["derive", "env", "string"] }
+clap = { version = "4.5", features = ["derive", "env", "string"] }
 
 # HTTP
-reqwest = { version = "~0.12", default-features = false, features = ["rustls-tls", "json", "gzip", "stream"] }
+reqwest = { version = "0.13", features = ["json", "gzip", "stream", "form"] }
 
 # Logging
-tracing = "~0.1"
-tracing-subscriber = { version = "~0.3", features = ["env-filter", "json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Terminal
-console = "~0.15"
-dialoguer = "~0.11"
-indicatif = "~0.17"
-comfy-table = "~7.1"
-termimad = "~0.30"
+console = "0.16"
+dialoguer = "0.12"
+indicatif = "0.18"
+comfy-table = "7.2"
+termimad = "0.34"
 
 # Utilities
-chrono = { version = "~0.4", features = ["serde"] }
-url = { version = "~2.5", features = ["serde"] }
-regex = "~1.11"
-dirs = "~6.0"
-open = "~5.3"
-shlex = "~1.3"
-which = "~7.0"
-keyring = { version = "~3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
-secrecy = { version = "~0.10", features = ["serde"] }
-urlencoding = "~2.1"
-base64 = "~0.22"
-sha2 = "~0.10"
-hex = "~0.4"
+chrono = { version = "0.4", features = ["serde"] }
+url = { version = "2.5", features = ["serde"] }
+regex = "1.12"
+dirs = "6.0"
+open = "5.3"
+shlex = "1.3"
+which = "8.0"
+keyring = { version = "3.6", features = [
+  "apple-native",
+  "windows-native",
+  "sync-secret-service",
+] }
+secrecy = { version = "0.10", features = ["serde"] }
+urlencoding = "2.1"
+base64 = "0.22"
+sha2 = "0.10"
+hex = "0.4"
 
 # Internal crates
 ghc-core = { path = "crates/ghc-core" }
@@ -71,12 +83,12 @@ ghc-git = { path = "crates/ghc-git" }
 ghc-cmd = { path = "crates/ghc-cmd" }
 
 # Testing
-rstest = "~0.25"
-mockall = "~0.13"
-wiremock = "~0.6"
-tempfile = "~3.15"
-assert_cmd = "~2.0"
-predicates = "~3.1"
-pretty_assertions = "~1.4"
-insta = { version = "~1.42", features = ["yaml"] }
-proptest = "~1.6"
+rstest = "0.26"
+mockall = "0.14"
+wiremock = "0.6"
+tempfile = "3.24"
+assert_cmd = "2.1"
+predicates = "3.1"
+pretty_assertions = "1.4"
+insta = { version = "1.46", features = ["yaml"] }
+proptest = "1.10"
