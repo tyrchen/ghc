@@ -184,6 +184,19 @@ impl AuthConfig for MemoryConfig {
         *active_user = username.to_string();
         Ok(())
     }
+
+    fn users_for_host(&self, hostname: &str) -> Vec<String> {
+        self.auth
+            .get(hostname)
+            .map(|(_, users)| users.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    fn token_for_user(&self, hostname: &str, username: &str) -> Option<(String, String)> {
+        let (_, users) = self.auth.get(hostname)?;
+        let token = users.get(username)?;
+        Some((token.clone(), "config".to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -498,5 +511,65 @@ mod tests {
             cfg.authentication().active_user("ghe.io"),
             Some("user2".to_string()),
         );
+    }
+
+    // --- users_for_host ---
+
+    #[test]
+    fn test_should_return_users_for_host() {
+        let mut cfg = MemoryConfig::new();
+        cfg.login("github.com", "user1", "token1", "https").unwrap();
+        cfg.login("github.com", "user2", "token2", "https").unwrap();
+        let users = cfg.users_for_host("github.com");
+        assert_eq!(users.len(), 2);
+        assert!(users.contains(&"user1".to_string()));
+        assert!(users.contains(&"user2".to_string()));
+    }
+
+    #[test]
+    fn test_should_return_empty_users_for_unknown_host() {
+        let cfg = MemoryConfig::new();
+        assert!(cfg.users_for_host("unknown.host").is_empty());
+    }
+
+    // --- token_for_user ---
+
+    #[test]
+    fn test_should_return_token_for_specific_user() {
+        let mut cfg = MemoryConfig::new();
+        cfg.login("github.com", "user1", "token1", "https").unwrap();
+        cfg.login("github.com", "user2", "token2", "https").unwrap();
+        let (token, source) = cfg.token_for_user("github.com", "user1").unwrap();
+        assert_eq!(token, "token1");
+        assert_eq!(source, "config");
+    }
+
+    #[test]
+    fn test_should_return_none_for_unknown_user_token() {
+        let cfg = MemoryConfig::new().with_host("github.com", "user1", "token1");
+        assert!(cfg.token_for_user("github.com", "ghost").is_none());
+    }
+
+    #[test]
+    fn test_should_return_none_for_unknown_host_token_for_user() {
+        let cfg = MemoryConfig::new();
+        assert!(cfg.token_for_user("unknown.host", "user").is_none());
+    }
+
+    // --- default_host ---
+
+    #[test]
+    fn test_should_return_default_host() {
+        let cfg = MemoryConfig::new()
+            .with_host("github.com", "user1", "token1")
+            .with_host("ghe.io", "user2", "token2");
+        let host = cfg.default_host();
+        assert!(host.is_some());
+    }
+
+    #[test]
+    fn test_should_return_none_for_empty_default_host() {
+        let cfg = MemoryConfig::new();
+        assert!(cfg.default_host().is_none());
     }
 }

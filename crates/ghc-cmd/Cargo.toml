@@ -27,6 +27,9 @@ tracing.workspace = true
 chrono.workspace = true
 url.workspace = true
 regex.workspace = true
+dialoguer.workspace = true
+urlencoding.workspace = true
+crypto_box.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

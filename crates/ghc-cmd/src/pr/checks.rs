@@ -62,9 +62,17 @@ pub struct ChecksArgs {
     #[arg(short, long)]
     watch: bool,
 
+    /// Polling interval in seconds (used with --watch).
+    #[arg(short, long, default_value = "10")]
+    interval: u64,
+
     /// Fail if any required check fails.
     #[arg(long)]
     fail_fast: bool,
+
+    /// Filter checks by name.
+    #[arg(long)]
+    required: bool,
 
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
@@ -92,7 +100,7 @@ impl ChecksArgs {
             }
 
             ios_eprintln!(&factory.io, "\nWaiting for checks to complete...");
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(self.interval)).await;
         }
 
         Ok(())
@@ -294,7 +302,9 @@ mod tests {
             number: 30,
             repo: "owner/repo".into(),
             watch: false,
+            interval: 10,
             fail_fast: false,
+            required: false,
             json: vec![],
         };
 
@@ -320,7 +330,9 @@ mod tests {
             number: 31,
             repo: "owner/repo".into(),
             watch: false,
+            interval: 10,
             fail_fast: false,
+            required: false,
             json: vec![],
         };
 
@@ -356,7 +368,9 @@ mod tests {
             number: 32,
             repo: "owner/repo".into(),
             watch: false,
+            interval: 10,
             fail_fast: true,
+            required: false,
             json: vec![],
         };
 
@@ -372,7 +386,9 @@ mod tests {
             number: 1,
             repo: "bad".into(),
             watch: false,
+            interval: 10,
             fail_fast: false,
+            required: false,
             json: vec![],
         };
 

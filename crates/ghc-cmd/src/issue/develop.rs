@@ -8,6 +8,24 @@ use serde_json::Value;
 
 use ghc_core::ios_eprintln;
 
+/// GraphQL query to fetch issue details and default branch for development.
+const ISSUE_FOR_DEVELOP_QUERY: &str = r"
+    query IssueForDevelop($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        issue(number: $number) {
+          id
+          title
+        }
+        defaultBranchRef {
+          name
+          target {
+            oid
+          }
+        }
+      }
+    }
+";
+
 /// Create a branch linked to an issue for development.
 ///
 /// This creates a new branch from the repository's default branch and
@@ -35,6 +53,15 @@ pub struct DevelopArgs {
     /// Checkout the branch locally after creation.
     #[arg(short, long)]
     checkout: bool,
+
+    /// Repository where the branch will be created (OWNER/REPO).
+    /// Defaults to the issue repository. Useful for creating branches in forks.
+    #[arg(long, conflicts_with = "list")]
+    branch_repo: Option<String>,
+
+    /// List branches linked to the issue instead of creating one.
+    #[arg(short, long, conflicts_with_all = ["branch_repo", "base", "name", "checkout"])]
+    list: bool,
 }
 
 impl DevelopArgs {
@@ -51,6 +78,10 @@ impl DevelopArgs {
         let ios = &factory.io;
         let cs = ios.color_scheme();
 
+        if self.list {
+            return self.run_list(&client, &repo, ios).await;
+        }
+
         // Fetch issue details to build branch name
         let mut issue_vars = HashMap::new();
         issue_vars.insert("owner".to_string(), Value::String(repo.owner().to_string()));
@@ -60,25 +91,8 @@ impl DevelopArgs {
             Value::Number(serde_json::Number::from(self.number)),
         );
 
-        let issue_query = r"
-            query IssueForDevelop($owner: String!, $name: String!, $number: Int!) {
-              repository(owner: $owner, name: $name) {
-                issue(number: $number) {
-                  id
-                  title
-                }
-                defaultBranchRef {
-                  name
-                  target {
-                    oid
-                  }
-                }
-              }
-            }
-        ";
-
         let data: Value = client
-            .graphql(issue_query, &issue_vars)
+            .graphql(ISSUE_FOR_DEVELOP_QUERY, &issue_vars)
             .await
             .context("failed to fetch issue details")?;
 
@@ -104,7 +118,15 @@ impl DevelopArgs {
             format!("{}-{slug}", self.number)
         };
 
-        // Get the SHA of the base branch
+        // Determine which repo to create the branch in
+        let target_repo = if let Some(ref branch_repo_name) = self.branch_repo {
+            ghc_core::repo::Repo::from_full_name(branch_repo_name)
+                .context("invalid --branch-repo format")?
+        } else {
+            repo.clone()
+        };
+
+        // Get the SHA of the base branch (from the issue repo)
         let ref_path = format!(
             "repos/{}/{}/git/ref/heads/{}",
             repo.owner(),
@@ -113,7 +135,7 @@ impl DevelopArgs {
         );
 
         let ref_data: Value = client
-            .rest(reqwest::Method::GET, &ref_path, None)
+            .rest(reqwest::Method::GET, &ref_path, None::<&Value>)
             .await
             .context("failed to fetch base branch reference")?;
 
@@ -122,8 +144,12 @@ impl DevelopArgs {
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("could not determine SHA of branch {base_branch}"))?;
 
-        // Create the branch via REST API
-        let create_ref_path = format!("repos/{}/{}/git/refs", repo.owner(), repo.name());
+        // Create the branch via REST API in the target repo
+        let create_ref_path = format!(
+            "repos/{}/{}/git/refs",
+            target_repo.owner(),
+            target_repo.name(),
+        );
         let create_body = serde_json::json!({
             "ref": format!("refs/heads/{branch_name}"),
             "sha": sha,
@@ -140,7 +166,7 @@ impl DevelopArgs {
             cs.success_icon(),
             cs.bold(&branch_name),
             self.number,
-            cs.bold(&repo.full_name()),
+            cs.bold(&target_repo.full_name()),
         );
 
         // Checkout locally if requested
@@ -159,6 +185,70 @@ impl DevelopArgs {
                 cs.success_icon(),
                 cs.bold(&branch_name),
             );
+        }
+
+        Ok(())
+    }
+
+    /// List branches linked to an issue via the Timeline events API.
+    async fn run_list(
+        &self,
+        client: &ghc_api::client::Client,
+        repo: &ghc_core::repo::Repo,
+        ios: &ghc_core::iostreams::IOStreams,
+    ) -> Result<()> {
+        let cs = ios.color_scheme();
+
+        let path = format!(
+            "repos/{}/{}/issues/{}/timeline?per_page=100",
+            repo.owner(),
+            repo.name(),
+            self.number,
+        );
+
+        let events: Vec<Value> = client
+            .rest(reqwest::Method::GET, &path, None::<&Value>)
+            .await
+            .context("failed to fetch issue timeline")?;
+
+        let mut branches: Vec<String> = Vec::new();
+        for event in &events {
+            let event_type = event.get("event").and_then(Value::as_str).unwrap_or("");
+            if event_type == "cross-referenced"
+                && let Some(ref_name) = event
+                    .pointer("/source/issue/pull_request/html_url")
+                    .and_then(Value::as_str)
+                && let Some(head_ref) = event
+                    .pointer("/source/issue/pull_request/head/ref")
+                    .and_then(Value::as_str)
+            {
+                branches.push(format!("{head_ref} (PR: {ref_name})"));
+            }
+            if event_type == "referenced"
+                && let Some(ref_name) = event.get("commit_id").and_then(Value::as_str)
+            {
+                let short_sha = &ref_name[..7.min(ref_name.len())];
+                branches.push(format!("commit {short_sha}"));
+            }
+        }
+
+        if branches.is_empty() {
+            ios_eprintln!(
+                ios,
+                "No linked branches found for issue #{} in {}",
+                self.number,
+                cs.bold(&repo.full_name()),
+            );
+        } else {
+            ios_eprintln!(
+                ios,
+                "Branches linked to issue #{} in {}:",
+                self.number,
+                cs.bold(&repo.full_name()),
+            );
+            for branch in &branches {
+                ghc_core::ios_println!(ios, "  {branch}");
+            }
         }
 
         Ok(())

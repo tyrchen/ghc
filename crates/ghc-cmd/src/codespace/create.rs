@@ -2,8 +2,9 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
-use ghc_core::ios_eprintln;
 use serde_json::Value;
+
+use ghc_core::{ios_eprintln, ios_println};
 
 /// Create a codespace.
 #[derive(Debug, Args)]
@@ -39,6 +40,14 @@ pub struct CreateArgs {
     /// Location preference.
     #[arg(short, long)]
     location: Option<String>,
+
+    /// Show status after creation.
+    #[arg(short, long)]
+    status: bool,
+
+    /// Open in browser instead of creating via API.
+    #[arg(short, long)]
+    web: bool,
 }
 
 impl CreateArgs {
@@ -48,8 +57,6 @@ impl CreateArgs {
     ///
     /// Returns an error if the codespace cannot be created.
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
-        let client = factory.api_client("github.com")?;
-
         let repo_name = self
             .repo
             .as_deref()
@@ -57,14 +64,23 @@ impl CreateArgs {
         let repo =
             ghc_core::repo::Repo::from_full_name(repo_name).context("invalid repository format")?;
 
-        let mut body = serde_json::json!({
-            "repository_id": 0,  // Will be resolved
-        });
+        if self.web {
+            let url = format!(
+                "https://github.com/codespaces/new?repo={}/{}",
+                repo.owner(),
+                repo.name()
+            );
+            factory.browser().open(&url)?;
+            return Ok(());
+        }
+
+        let client = factory.api_client("github.com")?;
+        let ios = &factory.io;
 
         // Resolve repository ID
-        let repo_path = format!("repos/{}/{}", repo.owner(), repo.name(),);
+        let repo_path = format!("repos/{}/{}", repo.owner(), repo.name());
         let repo_data: Value = client
-            .rest(reqwest::Method::GET, &repo_path, None)
+            .rest(reqwest::Method::GET, &repo_path, None::<&Value>)
             .await
             .context("failed to look up repository")?;
 
@@ -73,13 +89,25 @@ impl CreateArgs {
             .and_then(Value::as_u64)
             .ok_or_else(|| anyhow::anyhow!("could not determine repository ID"))?;
 
-        body["repository_id"] = serde_json::json!(repo_id);
+        // Determine machine type (interactive selection if not provided)
+        let machine_name = if let Some(ref m) = self.machine {
+            m.clone()
+        } else if ios.can_prompt() {
+            self.select_machine(&client, &repo, repo_id, factory)
+                .await?
+        } else {
+            String::new()
+        };
+
+        let mut body = serde_json::json!({
+            "repository_id": repo_id,
+        });
 
         if let Some(ref branch) = self.branch {
             body["ref"] = Value::String(branch.clone());
         }
-        if let Some(ref machine) = self.machine {
-            body["machine"] = Value::String(machine.clone());
+        if !machine_name.is_empty() {
+            body["machine"] = Value::String(machine_name);
         }
         if let Some(ref name) = self.display_name {
             body["display_name"] = Value::String(name.clone());
@@ -105,7 +133,6 @@ impl CreateArgs {
         let name = result.get("name").and_then(Value::as_str).unwrap_or("");
         let state = result.get("state").and_then(Value::as_str).unwrap_or("");
 
-        let ios = &factory.io;
         let cs = ios.color_scheme();
         ios_eprintln!(
             ios,
@@ -114,6 +141,90 @@ impl CreateArgs {
             cs.bold(name),
         );
 
+        if self.status {
+            ios_println!(ios, "{}", serde_json::to_string_pretty(&result)?);
+        }
+
         Ok(())
+    }
+
+    /// Fetch available machine types and prompt the user to select one.
+    async fn select_machine(
+        &self,
+        client: &ghc_api::client::Client,
+        repo: &ghc_core::repo::Repo,
+        repo_id: u64,
+        factory: &crate::factory::Factory,
+    ) -> Result<String> {
+        let mut path = format!("repos/{}/{}/codespaces/machines", repo.owner(), repo.name());
+        if let Some(ref branch) = self.branch {
+            use std::fmt::Write;
+            let _ = write!(path, "?ref={branch}");
+        }
+
+        let machines: Value = client
+            .rest(reqwest::Method::GET, &path, None::<&Value>)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to fetch available machines for {}/{} (repo_id={repo_id})",
+                    repo.owner(),
+                    repo.name()
+                )
+            })?;
+
+        let machine_list = machines
+            .get("machines")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("no machine types available for this repository"))?;
+
+        if machine_list.is_empty() {
+            return Err(anyhow::anyhow!(
+                "no machine types available for this repository"
+            ));
+        }
+
+        let items: Vec<String> = machine_list
+            .iter()
+            .filter_map(|m: &Value| {
+                let name = m.get("name")?.as_str()?;
+                let display = m.get("display_name")?.as_str()?;
+                let cpus = m.get("cpus").and_then(Value::as_u64).unwrap_or(0);
+                let mem_bytes = m
+                    .get("memory_in_bytes")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let mem_gb = mem_bytes / (1024 * 1024 * 1024);
+                let storage_bytes = m
+                    .get("storage_in_bytes")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let storage_gb = storage_bytes / (1024 * 1024 * 1024);
+                Some(format!(
+                    "{name}: {display} ({cpus} cores, {mem_gb}GB RAM, {storage_gb}GB disk)"
+                ))
+            })
+            .collect();
+
+        if items.is_empty() {
+            return Err(anyhow::anyhow!(
+                "no machine types available for this repository"
+            ));
+        }
+
+        let prompter = factory.prompter();
+        let selection = prompter
+            .select("Choose a machine type", Some(0), &items)
+            .context("failed to read machine type selection")?;
+
+        // Extract machine name (before the first colon)
+        let selected = &items[selection];
+        let machine_name = selected
+            .split(':')
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("invalid machine selection"))?
+            .to_string();
+
+        Ok(machine_name)
     }
 }

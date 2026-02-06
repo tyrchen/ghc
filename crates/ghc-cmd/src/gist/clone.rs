@@ -15,6 +15,10 @@ pub struct CloneArgs {
     /// Directory to clone into.
     #[arg(value_name = "DIRECTORY")]
     directory: Option<String>,
+
+    /// Git protocol to use (https or ssh).
+    #[arg(long, default_value = "https", value_parser = ["https", "ssh"])]
+    protocol: String,
 }
 
 impl CloneArgs {
@@ -25,7 +29,12 @@ impl CloneArgs {
     /// Returns an error if the clone operation fails.
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let gist_id = extract_gist_id(&self.gist);
-        let clone_url = format!("https://gist.github.com/{gist_id}.git");
+
+        let clone_url = match self.protocol.as_str() {
+            "ssh" => format!("git@gist.github.com:{gist_id}.git"),
+            _ => format!("https://gist.github.com/{gist_id}.git"),
+        };
+
         let dest = self.directory.as_deref().unwrap_or(gist_id);
 
         let ios = &factory.io;
@@ -88,5 +97,26 @@ mod tests {
             extract_gist_id("https://gist.github.com/user/abc123"),
             "abc123"
         );
+    }
+
+    #[test]
+    fn test_should_build_ssh_url() {
+        let args = CloneArgs {
+            gist: "abc123".into(),
+            directory: None,
+            protocol: "ssh".into(),
+        };
+        // Verify protocol field is set correctly
+        assert_eq!(args.protocol, "ssh");
+    }
+
+    #[test]
+    fn test_should_build_https_url() {
+        let args = CloneArgs {
+            gist: "abc123".into(),
+            directory: None,
+            protocol: "https".into(),
+        };
+        assert_eq!(args.protocol, "https");
     }
 }

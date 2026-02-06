@@ -9,6 +9,8 @@ pub mod download;
 pub mod edit;
 pub mod list;
 pub mod upload;
+pub mod verify;
+pub mod verify_asset;
 pub mod view;
 
 use clap::Subcommand;
@@ -32,6 +34,11 @@ pub enum ReleaseCommand {
     List(list::ListArgs),
     /// Upload assets to a release.
     Upload(upload::UploadArgs),
+    /// Verify the attestation for a release.
+    Verify(verify::VerifyArgs),
+    /// Verify that an asset originated from a release.
+    #[command(name = "verify-asset")]
+    VerifyAsset(verify_asset::VerifyAssetArgs),
     /// View a release.
     View(view::ViewArgs),
 }
@@ -51,6 +58,8 @@ impl ReleaseCommand {
             Self::Edit(args) => args.run(factory).await,
             Self::List(args) => args.run(factory).await,
             Self::Upload(args) => args.run(factory).await,
+            Self::Verify(args) => args.run(factory).await,
+            Self::VerifyAsset(args) => args.run(factory).await,
             Self::View(args) => args.run(factory).await,
         }
     }

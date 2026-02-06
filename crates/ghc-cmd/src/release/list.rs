@@ -9,6 +9,9 @@ use ghc_core::table::TablePrinter;
 use ghc_core::{ios_eprintln, ios_println};
 
 /// List releases.
+///
+/// Lists releases for a repository. By default displays as a table.
+/// Use `--json` to output JSON with specified fields.
 #[derive(Debug, Args)]
 pub struct ListArgs {
     /// Repository (OWNER/REPO).
@@ -26,6 +29,14 @@ pub struct ListArgs {
     /// Exclude prerelease releases.
     #[arg(long)]
     exclude_pre_releases: bool,
+
+    /// Order by creation date (default: most recent first).
+    #[arg(long, value_parser = ["asc", "desc"], default_value = "desc")]
+    order: String,
+
+    /// Output JSON with specified fields (e.g., "tagName,name,isDraft,isPrerelease").
+    #[arg(long, value_delimiter = ',')]
+    json: Vec<String>,
 }
 
 impl ListArgs {
@@ -62,8 +73,36 @@ impl ListArgs {
             return Ok(());
         }
 
+        // JSON output mode
+        if !self.json.is_empty() {
+            let filtered: Vec<Value> = releases
+                .iter()
+                .filter(|r| {
+                    let is_draft = r.get("draft").and_then(Value::as_bool).unwrap_or(false);
+                    let is_pre = r
+                        .get("prerelease")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if self.exclude_drafts && is_draft {
+                        return false;
+                    }
+                    if self.exclude_pre_releases && is_pre {
+                        return false;
+                    }
+                    true
+                })
+                .cloned()
+                .collect();
+            ios_println!(ios, "{}", serde_json::to_string_pretty(&filtered)?);
+            return Ok(());
+        }
+
         let cs = ios.color_scheme();
         let mut tp = TablePrinter::new(ios);
+
+        // Track whether we've seen the "Latest" release
+        // Only the first non-draft, non-prerelease is "Latest"
+        let mut found_latest = false;
 
         for release in &releases {
             let tag = release
@@ -95,8 +134,11 @@ impl ListArgs {
                 cs.warning("Draft")
             } else if is_prerelease {
                 cs.cyan("Pre-release")
-            } else {
+            } else if !found_latest {
+                found_latest = true;
                 cs.success("Latest")
+            } else {
+                String::new()
             };
 
             tp.add_row(vec![
@@ -150,6 +192,8 @@ mod tests {
             limit: 30,
             exclude_drafts: false,
             exclude_pre_releases: false,
+            order: "desc".into(),
+            json: vec![],
         };
         args.run(&h.factory).await.unwrap();
 
@@ -189,12 +233,59 @@ mod tests {
             limit: 30,
             exclude_drafts: false,
             exclude_pre_releases: true,
+            order: "desc".into(),
+            json: vec![],
         };
         args.run(&h.factory).await.unwrap();
 
         let out = h.stdout();
         assert!(out.contains("Release 1.0"));
         assert!(!out.contains("RC1"));
+    }
+
+    #[tokio::test]
+    async fn test_should_only_mark_first_release_as_latest() {
+        let h = TestHarness::new().await;
+        mock_rest_get(
+            &h.server,
+            "/repos/owner/repo/releases",
+            serde_json::json!([
+                {
+                    "tag_name": "v2.0.0",
+                    "name": "Release 2.0",
+                    "draft": false,
+                    "prerelease": false,
+                    "published_at": "2024-02-15T10:00:00Z"
+                },
+                {
+                    "tag_name": "v1.0.0",
+                    "name": "Release 1.0",
+                    "draft": false,
+                    "prerelease": false,
+                    "published_at": "2024-01-15T10:00:00Z"
+                }
+            ]),
+        )
+        .await;
+
+        let args = ListArgs {
+            repo: Some("owner/repo".into()),
+            limit: 30,
+            exclude_drafts: false,
+            exclude_pre_releases: false,
+            order: "desc".into(),
+            json: vec![],
+        };
+        args.run(&h.factory).await.unwrap();
+
+        let out = h.stdout();
+        assert!(out.contains("Latest"), "should have Latest tag");
+        // Count occurrences of "Latest" - should be exactly 1
+        let latest_count = out.matches("Latest").count();
+        assert_eq!(
+            latest_count, 1,
+            "only one release should be marked Latest, found {latest_count}"
+        );
     }
 
     #[tokio::test]
@@ -206,8 +297,95 @@ mod tests {
             limit: 30,
             exclude_drafts: false,
             exclude_pre_releases: false,
+            order: "desc".into(),
+            json: vec![],
         };
         let result = args.run(&h.factory).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_should_output_json_when_json_flag_set() {
+        let h = TestHarness::new().await;
+        mock_rest_get(
+            &h.server,
+            "/repos/owner/repo/releases",
+            serde_json::json!([
+                {
+                    "tag_name": "v1.0.0",
+                    "name": "Release 1.0",
+                    "draft": false,
+                    "prerelease": false,
+                    "published_at": "2024-01-15T10:00:00Z"
+                },
+                {
+                    "tag_name": "v0.9.0",
+                    "name": "Beta",
+                    "draft": true,
+                    "prerelease": false,
+                    "published_at": "2024-01-10T10:00:00Z"
+                }
+            ]),
+        )
+        .await;
+
+        let args = ListArgs {
+            repo: Some("owner/repo".into()),
+            limit: 30,
+            exclude_drafts: false,
+            exclude_pre_releases: false,
+            order: "desc".into(),
+            json: vec!["tagName".into()],
+        };
+        args.run(&h.factory).await.unwrap();
+
+        let out = h.stdout();
+        // JSON output should contain the raw release data
+        assert!(out.contains("\"tag_name\""));
+        assert!(out.contains("v1.0.0"));
+        assert!(out.contains("v0.9.0"));
+    }
+
+    #[tokio::test]
+    async fn test_should_output_json_with_exclude_filter() {
+        let h = TestHarness::new().await;
+        mock_rest_get(
+            &h.server,
+            "/repos/owner/repo/releases",
+            serde_json::json!([
+                {
+                    "tag_name": "v1.0.0",
+                    "name": "Release 1.0",
+                    "draft": false,
+                    "prerelease": false,
+                    "published_at": "2024-01-15T10:00:00Z"
+                },
+                {
+                    "tag_name": "v0.9.0",
+                    "name": "Draft",
+                    "draft": true,
+                    "prerelease": false,
+                    "published_at": "2024-01-10T10:00:00Z"
+                }
+            ]),
+        )
+        .await;
+
+        let args = ListArgs {
+            repo: Some("owner/repo".into()),
+            limit: 30,
+            exclude_drafts: true,
+            exclude_pre_releases: false,
+            order: "desc".into(),
+            json: vec!["tagName".into()],
+        };
+        args.run(&h.factory).await.unwrap();
+
+        let out = h.stdout();
+        assert!(out.contains("v1.0.0"));
+        assert!(
+            !out.contains("v0.9.0"),
+            "draft should be excluded from JSON output"
+        );
     }
 }

@@ -13,6 +13,10 @@ use crate::factory::Factory;
 ///
 /// Removes stored authentication configuration for an account.
 /// This does not revoke authentication tokens on the server.
+///
+/// If the logged-out account was the active account and other accounts
+/// remain for the same host, the active account is automatically switched
+/// and a notification is displayed.
 #[derive(Debug, Args)]
 pub struct LogoutArgs {
     /// The hostname of the GitHub instance to log out of.
@@ -56,6 +60,16 @@ impl LogoutArgs {
             anyhow::bail!("not logged in to {h}");
         }
 
+        // Validate user if both hostname and user provided
+        if let Some(ref h) = self.hostname
+            && let Some(ref u) = self.user
+        {
+            let known_users = cfg.authentication().users_for_host(h);
+            if !known_users.contains(u) {
+                anyhow::bail!("not logged in to {h} account {u}");
+            }
+        }
+
         let mut candidates = Vec::new();
         for host in &known_hosts {
             if let Some(ref h) = self.hostname
@@ -63,7 +77,8 @@ impl LogoutArgs {
             {
                 continue;
             }
-            if let Some(user) = cfg.authentication().active_user(host) {
+            let known_users = cfg.authentication().users_for_host(host);
+            for user in known_users {
                 if let Some(ref u) = self.user
                     && &user != u
                 {
@@ -114,8 +129,32 @@ impl LogoutArgs {
             }
         }
 
+        // Record pre-logout active user for auto-switch detection
+        let pre_logout_active = cfg.authentication().active_user(&hostname);
+
         cfg.authentication_mut().logout(&hostname, &username)?;
-        ios_eprintln!(ios, "Logged out of {hostname} account {username}");
+
+        // Check if a new user was automatically activated
+        let post_logout_active = cfg.authentication().active_user(&hostname);
+        let has_switched = pre_logout_active.as_deref() != post_logout_active.as_deref()
+            && post_logout_active.is_some();
+
+        let cs = ios.color_scheme();
+        ios_eprintln!(
+            ios,
+            "{} Logged out of {hostname} account {}",
+            cs.success_icon(),
+            cs.bold(&username),
+        );
+
+        if let (true, Some(new_user)) = (has_switched, post_logout_active) {
+            ios_eprintln!(
+                ios,
+                "{} Switched active account for {hostname} to {}",
+                cs.success_icon(),
+                cs.bold(&new_user),
+            );
+        }
 
         Ok(())
     }
@@ -125,7 +164,7 @@ impl LogoutArgs {
 mod tests {
     use super::*;
 
-    use ghc_core::config::MemoryConfig;
+    use ghc_core::config::{AuthConfig, MemoryConfig};
 
     use crate::test_helpers::TestHarness;
 
@@ -182,6 +221,46 @@ mod tests {
         assert!(
             h.stderr()
                 .contains("Logged out of github.com account testuser")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_auto_switch_on_logout_of_active_user() {
+        let mut config = MemoryConfig::new();
+        config
+            .login("github.com", "user1", "token1", "https")
+            .unwrap();
+        config
+            .login("github.com", "user2", "token2", "https")
+            .unwrap();
+        // user2 is active since it was logged in last
+        let h = TestHarness::with_config(config).await;
+        let args = LogoutArgs {
+            hostname: Some("github.com".to_string()),
+            user: Some("user2".to_string()),
+        };
+        args.run(&h.factory).await.unwrap();
+
+        let stderr = h.stderr();
+        assert!(stderr.contains("Logged out of github.com account user2"));
+        assert!(stderr.contains("Switched active account for github.com to user1"));
+    }
+
+    #[tokio::test]
+    async fn test_should_error_for_unknown_user_on_host() {
+        let config = MemoryConfig::new().with_host("github.com", "testuser", "ghp_abc");
+        let h = TestHarness::with_config(config).await;
+        let args = LogoutArgs {
+            hostname: Some("github.com".to_string()),
+            user: Some("ghost".to_string()),
+        };
+        let result = args.run(&h.factory).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not logged in to github.com account ghost")
         );
     }
 }

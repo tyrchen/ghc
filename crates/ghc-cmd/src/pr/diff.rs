@@ -8,6 +8,7 @@ use ghc_core::{ios_print, ios_println};
 
 /// View the diff of a pull request.
 #[derive(Debug, Args)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct DiffArgs {
     /// Pull request number.
     #[arg(value_name = "NUMBER")]
@@ -24,6 +25,14 @@ pub struct DiffArgs {
     /// Name-only: show only names of changed files.
     #[arg(long)]
     name_only: bool,
+
+    /// Display the raw patch format instead of unified diff.
+    #[arg(long)]
+    patch: bool,
+
+    /// Open the diff in the web browser.
+    #[arg(short, long)]
+    web: bool,
 }
 
 impl DiffArgs {
@@ -39,13 +48,23 @@ impl DiffArgs {
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let repo = ghc_core::repo::Repo::from_full_name(&self.repo)
             .context("invalid repository format")?;
+
+        if self.web {
+            let url = format!(
+                "https://{}/{}/{}/pull/{}/files",
+                repo.host(),
+                repo.owner(),
+                repo.name(),
+                self.number,
+            );
+            factory.browser().open(&url)?;
+            return Ok(());
+        }
+
         let client = factory.api_client(repo.host())?;
         let ios = &factory.io;
 
         // Fetch the diff using the REST text endpoint.
-        // GitHub returns a unified diff when requesting the .diff suffix path
-        // or when using the appropriate Accept header. We use rest_text here
-        // which returns the raw response body as a string.
         let path = format!(
             "repos/{}/{}/pulls/{}",
             repo.owner(),
@@ -81,8 +100,9 @@ impl DiffArgs {
         // Accept header is set to application/vnd.github.v3.diff. Since our
         // client does not support custom headers on REST calls, we use the
         // web URL pattern which provides the diff as plain text.
+        let suffix = if self.patch { "patch" } else { "diff" };
         let diff_url = format!(
-            "https://{}/{}/{}/pull/{}.diff",
+            "https://{}/{}/{}/pull/{}.{suffix}",
             repo.host(),
             repo.owner(),
             repo.name(),
@@ -139,6 +159,8 @@ mod tests {
             repo: "owner/repo".into(),
             color: false,
             name_only: true,
+            patch: false,
+            web: false,
         };
 
         args.run(&h.factory).await.unwrap();
@@ -151,6 +173,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_should_open_browser_in_web_mode() {
+        let h = TestHarness::new().await;
+        let args = DiffArgs {
+            number: 40,
+            repo: "owner/repo".into(),
+            color: false,
+            name_only: false,
+            patch: false,
+            web: true,
+        };
+
+        args.run(&h.factory).await.unwrap();
+        let urls = h.opened_urls();
+        assert_eq!(urls.len(), 1);
+        assert!(
+            urls[0].contains("/pull/40/files"),
+            "should open diff URL: {}",
+            urls[0]
+        );
+    }
+
+    #[tokio::test]
     async fn test_should_return_error_on_invalid_repo_for_diff() {
         let h = TestHarness::new().await;
         let args = DiffArgs {
@@ -158,6 +202,8 @@ mod tests {
             repo: "bad".into(),
             color: false,
             name_only: false,
+            patch: false,
+            web: false,
         };
 
         let result = args.run(&h.factory).await;

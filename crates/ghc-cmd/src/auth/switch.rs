@@ -26,6 +26,12 @@ pub struct SwitchArgs {
     user: Option<String>,
 }
 
+struct HostUser {
+    host: String,
+    user: String,
+    active: bool,
+}
+
 impl SwitchArgs {
     /// Run the switch command.
     ///
@@ -50,42 +56,42 @@ impl SwitchArgs {
             anyhow::bail!("not logged in to {h}");
         }
 
-        let hostname = match &self.hostname {
-            Some(h) => h.clone(),
-            None => {
-                if known_hosts.len() == 1 {
-                    known_hosts[0].clone()
-                } else if !ios.can_prompt() {
-                    anyhow::bail!(
-                        "unable to determine which host to switch account for, please specify `--hostname`"
-                    );
-                } else {
-                    let prompter = factory.prompter();
-                    let idx = prompter.select(
-                        "What host do you want to switch account for?",
-                        None,
-                        &known_hosts,
-                    )?;
-                    known_hosts[idx].clone()
-                }
+        // Validate user if both hostname and user provided
+        if let Some(ref h) = self.hostname
+            && let Some(ref u) = self.user
+        {
+            let known_users = cfg.authentication().users_for_host(h);
+            if !known_users.contains(u) {
+                anyhow::bail!("not logged in to {h} account {u}");
             }
-        };
+        }
 
-        let username = if let Some(u) = &self.user {
-            u.clone()
-        } else {
-            if !ios.can_prompt() {
-                anyhow::bail!(
-                    "unable to determine which account to switch to, please specify `--user`"
-                );
+        // Build candidates list
+        let mut candidates = Vec::new();
+        for host in &known_hosts {
+            if let Some(ref h) = self.hostname
+                && host != h
+            {
+                continue;
             }
-            let prompter = factory.prompter();
-            let input = prompter.input("Which user do you want to switch to?", "")?;
-            if input.is_empty() {
-                anyhow::bail!("username cannot be empty");
+            let active_user = cfg.authentication().active_user(host);
+            let known_users = cfg.authentication().users_for_host(host);
+            for user in known_users {
+                if let Some(ref u) = self.user
+                    && &user != u
+                {
+                    continue;
+                }
+                let is_active = active_user.as_deref() == Some(user.as_str());
+                candidates.push(HostUser {
+                    host: host.clone(),
+                    user,
+                    active: is_active,
+                });
             }
-            input
-        };
+        }
+
+        let (hostname, username) = select_candidate(&candidates, ios.can_prompt(), factory)?;
 
         // Check if token is writeable
         if let Some((_, source)) = cfg.authentication().active_token(&hostname) {
@@ -103,11 +109,73 @@ impl SwitchArgs {
             }
         }
 
-        cfg.authentication_mut().switch_user(&hostname, &username)?;
-        ios_eprintln!(ios, "Switched active account for {hostname} to {username}");
+        let cs = ios.color_scheme();
+
+        if let Err(e) = cfg.authentication_mut().switch_user(&hostname, &username) {
+            ios_eprintln!(
+                ios,
+                "{} Failed to switch account for {} to {}",
+                cs.error_icon(),
+                &hostname,
+                cs.bold(&username),
+            );
+            return Err(e);
+        }
+
+        ios_eprintln!(
+            ios,
+            "{} Switched active account for {} to {}",
+            cs.success_icon(),
+            &hostname,
+            cs.bold(&username),
+        );
 
         Ok(())
     }
+}
+
+/// Select which candidate to switch to based on the available options.
+fn select_candidate(
+    candidates: &[HostUser],
+    can_prompt: bool,
+    factory: &Factory,
+) -> anyhow::Result<(String, String)> {
+    if candidates.is_empty() {
+        anyhow::bail!("no accounts matched that criteria");
+    }
+    if candidates.len() == 1 {
+        return Ok((candidates[0].host.clone(), candidates[0].user.clone()));
+    }
+    if candidates.len() == 2 && candidates[0].host == candidates[1].host {
+        let host = candidates[0].host.clone();
+        let user = if candidates[0].active {
+            candidates[1].user.clone()
+        } else {
+            candidates[0].user.clone()
+        };
+        return Ok((host, user));
+    }
+    if !can_prompt {
+        anyhow::bail!(
+            "unable to determine which account to switch to, please specify `--hostname` and `--user`"
+        );
+    }
+    let prompts: Vec<String> = candidates
+        .iter()
+        .map(|c| {
+            let mut prompt = format!("{} ({})", c.user, c.host);
+            if c.active {
+                prompt += " - active";
+            }
+            prompt
+        })
+        .collect();
+    let prompter = factory.prompter();
+    let selected = prompter.select("What account do you want to switch to?", None, &prompts)?;
+    Ok((
+        candidates[selected].host.clone(),
+        candidates[selected].user.clone(),
+    ))
 }
 
 #[cfg(test)]
@@ -138,6 +206,23 @@ mod tests {
             user: Some("user1".to_string()),
         };
         args.run(&h.factory).unwrap();
+        assert!(
+            h.stderr()
+                .contains("Switched active account for github.com to user1")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_auto_switch_for_two_accounts() {
+        let config = two_user_config();
+        // user2 is active (logged in last)
+        let h = TestHarness::with_config(config).await;
+        let args = SwitchArgs {
+            hostname: Some("github.com".to_string()),
+            user: None,
+        };
+        args.run(&h.factory).unwrap();
+        // Should auto-switch to user1 (the inactive one)
         assert!(
             h.stderr()
                 .contains("Switched active account for github.com to user1")
@@ -180,5 +265,11 @@ mod tests {
         };
         let result = args.run(&h.factory);
         assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not logged in to github.com account ghost")
+        );
     }
 }

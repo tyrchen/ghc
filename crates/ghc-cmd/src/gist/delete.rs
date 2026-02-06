@@ -11,6 +11,10 @@ pub struct DeleteArgs {
     /// The gist ID or URL to delete.
     #[arg(value_name = "GIST")]
     gist: String,
+
+    /// Skip confirmation prompt.
+    #[arg(long)]
+    yes: bool,
 }
 
 impl DeleteArgs {
@@ -21,6 +25,19 @@ impl DeleteArgs {
     /// Returns an error if the gist cannot be deleted.
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let gist_id = self.gist.rsplit('/').next().unwrap_or(&self.gist);
+        let ios = &factory.io;
+
+        // Interactive confirmation unless --yes is passed
+        if !self.yes && ios.is_stdout_tty() {
+            let prompter = factory.prompter();
+            let confirmed = prompter
+                .confirm(&format!("Delete gist {gist_id}?"), false)
+                .context("failed to prompt for confirmation")?;
+            if !confirmed {
+                ios_eprintln!(ios, "Cancelled.");
+                return Ok(());
+            }
+        }
 
         let client = factory.api_client("github.com")?;
         let path = format!("gists/{gist_id}");
@@ -30,7 +47,6 @@ impl DeleteArgs {
             .await
             .context("failed to delete gist")?;
 
-        let ios = &factory.io;
         let cs = ios.color_scheme();
         ios_eprintln!(ios, "{} Deleted gist {gist_id}", cs.success_icon());
 
@@ -45,12 +61,13 @@ mod tests {
     use crate::test_helpers::{TestHarness, mock_rest_delete};
 
     #[tokio::test]
-    async fn test_should_delete_gist() {
+    async fn test_should_delete_gist_with_yes_flag() {
         let h = TestHarness::new().await;
         mock_rest_delete(&h.server, "/gists/abc123", 204).await;
 
         let args = DeleteArgs {
             gist: "abc123".into(),
+            yes: true,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -66,6 +83,7 @@ mod tests {
 
         let args = DeleteArgs {
             gist: "https://gist.github.com/xyz789".into(),
+            yes: true,
         };
         args.run(&h.factory).await.unwrap();
 

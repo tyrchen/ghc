@@ -75,6 +75,10 @@ urlencoding = "2.1"
 base64 = "0.22"
 sha2 = "0.10"
 hex = "0.4"
+crypto_box = { version = "0.9", features = ["seal"] }
+flate2 = "1.1"
+tar = "0.4"
+zip = { version = "7.4", default-features = false, features = ["deflate"] }
 
 # Internal crates
 ghc-core = { path = "crates/ghc-core" }

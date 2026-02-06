@@ -25,6 +25,10 @@ pub struct ViewArgs {
     #[arg(short, long)]
     web: bool,
 
+    /// List the filenames in the gist without showing content.
+    #[arg(long)]
+    list_files: bool,
+
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
@@ -70,6 +74,20 @@ impl ViewArgs {
             .ok_or_else(|| anyhow::anyhow!("unexpected gist response format"))?;
 
         let cs = ios.color_scheme();
+
+        // List files mode - just show filenames
+        if self.list_files {
+            for name in files.keys() {
+                let file_data = &files[name];
+                let size = file_data.get("size").and_then(Value::as_u64).unwrap_or(0);
+                let language = file_data
+                    .get("language")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Text");
+                ios_println!(ios, "{}\t{language}\t{size} bytes", cs.bold(name));
+            }
+            return Ok(());
+        }
 
         if !self.raw {
             if !description.is_empty() {
@@ -121,7 +139,9 @@ mod tests {
                 "description": "My test gist",
                 "files": {
                     "hello.rs": {
-                        "content": "fn main() { println!(\"hello\"); }"
+                        "content": "fn main() { println!(\"hello\"); }",
+                        "size": 32,
+                        "language": "Rust"
                     }
                 }
             }),
@@ -133,6 +153,7 @@ mod tests {
             filename: None,
             raw: false,
             web: false,
+            list_files: false,
             json: vec![],
         };
         args.run(&h.factory).await.unwrap();
@@ -154,7 +175,9 @@ mod tests {
                 "description": "My test gist",
                 "files": {
                     "hello.rs": {
-                        "content": "fn main() {}"
+                        "content": "fn main() {}",
+                        "size": 12,
+                        "language": "Rust"
                     }
                 }
             }),
@@ -166,6 +189,7 @@ mod tests {
             filename: None,
             raw: true,
             web: false,
+            list_files: false,
             json: vec![],
         };
         args.run(&h.factory).await.unwrap();
@@ -173,6 +197,49 @@ mod tests {
         let out = h.stdout();
         assert!(out.contains("fn main() {}"));
         assert!(!out.contains("My test gist"));
+    }
+
+    #[tokio::test]
+    async fn test_should_list_files() {
+        let h = TestHarness::new().await;
+        mock_rest_get(
+            &h.server,
+            "/gists/abc123",
+            serde_json::json!({
+                "id": "abc123",
+                "description": "Multi-file gist",
+                "files": {
+                    "hello.rs": {
+                        "content": "fn main() {}",
+                        "size": 12,
+                        "language": "Rust"
+                    },
+                    "notes.md": {
+                        "content": "# Notes",
+                        "size": 7,
+                        "language": "Markdown"
+                    }
+                }
+            }),
+        )
+        .await;
+
+        let args = ViewArgs {
+            gist: "abc123".into(),
+            filename: None,
+            raw: false,
+            web: false,
+            list_files: true,
+            json: vec![],
+        };
+        args.run(&h.factory).await.unwrap();
+
+        let out = h.stdout();
+        assert!(out.contains("hello.rs"));
+        assert!(out.contains("notes.md"));
+        // Should not contain file contents
+        assert!(!out.contains("fn main()"));
+        assert!(!out.contains("# Notes"));
     }
 
     #[tokio::test]
@@ -184,6 +251,7 @@ mod tests {
             filename: None,
             raw: false,
             web: true,
+            list_files: false,
             json: vec![],
         };
         args.run(&h.factory).await.unwrap();

@@ -8,9 +8,13 @@ use ghc_core::ios_eprintln;
 /// Upgrade installed extensions.
 #[derive(Debug, Args)]
 pub struct UpgradeArgs {
-    /// Extension name to upgrade (with or without `gh-` prefix). If omitted, upgrades all.
+    /// Extension name to upgrade (with or without `gh-` prefix).
     #[arg(value_name = "NAME")]
     name: Option<String>,
+
+    /// Upgrade all installed extensions.
+    #[arg(long)]
+    all: bool,
 
     /// Force upgrade even if already up-to-date.
     #[arg(long)]
@@ -37,6 +41,16 @@ impl UpgradeArgs {
             return Ok(());
         }
 
+        // Validate: either a name or --all, not both, and at least one
+        if self.name.is_some() && self.all {
+            return Err(anyhow::anyhow!("cannot use both extension name and --all"));
+        }
+        if self.name.is_none() && !self.all {
+            return Err(anyhow::anyhow!(
+                "specify an extension name or use --all to upgrade all"
+            ));
+        }
+
         if let Some(name) = &self.name {
             let ext_name = if name.starts_with("gh-") {
                 name.clone()
@@ -56,6 +70,9 @@ impl UpgradeArgs {
             let mut entries = tokio::fs::read_dir(&extensions_dir)
                 .await
                 .context("failed to read extensions directory")?;
+
+            let mut upgraded = 0u32;
+            let mut failed = 0u32;
 
             while let Some(entry) = entries
                 .next_entry()
@@ -77,8 +94,19 @@ impl UpgradeArgs {
                     continue;
                 }
 
-                self.upgrade_extension(ios, &entry.path(), &name, &cs)
-                    .await?;
+                match self.upgrade_extension(ios, &entry.path(), &name, &cs).await {
+                    Ok(()) => upgraded += 1,
+                    Err(e) => {
+                        ios_eprintln!(ios, "{} Failed to upgrade {name}: {e}", cs.error("X"));
+                        failed += 1;
+                    }
+                }
+            }
+
+            if upgraded == 0 && failed == 0 {
+                ios_eprintln!(ios, "No extensions to upgrade");
+            } else if failed > 0 {
+                ios_eprintln!(ios, "{upgraded} upgraded, {failed} failed");
             }
         }
 
@@ -93,14 +121,44 @@ impl UpgradeArgs {
         name: &str,
         cs: &ghc_core::iostreams::ColorScheme,
     ) -> Result<()> {
+        // Check if this is a binary extension (no .git directory)
+        let is_git = path.join(".git").exists();
+
         if self.dry_run {
-            ios_eprintln!(ios, "[dry-run] Would upgrade {}", cs.bold(name));
+            if is_git {
+                ios_eprintln!(ios, "[dry-run] Would upgrade {}", cs.bold(name));
+            } else {
+                ios_eprintln!(
+                    ios,
+                    "[dry-run] Would upgrade {} (binary, requires reinstall)",
+                    cs.bold(name)
+                );
+            }
             return Ok(());
         }
 
-        let mut args = vec!["pull".to_string()];
+        if !is_git {
+            ios_eprintln!(
+                ios,
+                "{} {} is a binary extension; use `ghc ext install --force OWNER/REPO` to upgrade",
+                cs.warning("!"),
+                name
+            );
+            return Ok(());
+        }
+
+        // Get current HEAD before pull
+        let before = tokio::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(path)
+            .output()
+            .await
+            .context("failed to get current HEAD")?;
+        let before_sha = String::from_utf8_lossy(&before.stdout).trim().to_string();
+
+        let mut args = vec!["pull".to_string(), "--ff-only".to_string()];
         if self.force {
-            args.push("--force".to_string());
+            args = vec!["pull".to_string(), "--rebase".to_string()];
         }
 
         let output = tokio::process::Command::new("git")
@@ -115,8 +173,16 @@ impl UpgradeArgs {
             return Err(anyhow::anyhow!("failed to upgrade {name}: {stderr}"));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.contains("Already up to date") && !self.force {
+        // Get HEAD after pull
+        let after = tokio::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(path)
+            .output()
+            .await
+            .context("failed to get new HEAD")?;
+        let after_sha = String::from_utf8_lossy(&after.stdout).trim().to_string();
+
+        if before_sha == after_sha && !self.force {
             ios_eprintln!(ios, "{} {} already up to date", cs.success_icon(), name);
         } else {
             ios_eprintln!(ios, "{} Upgraded {}", cs.success_icon(), cs.bold(name));

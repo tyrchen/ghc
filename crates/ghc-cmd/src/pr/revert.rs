@@ -8,6 +8,7 @@ use ghc_core::ios_eprintln;
 
 /// Revert a merged pull request by creating a new PR that undoes its changes.
 #[derive(Debug, Args)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct RevertArgs {
     /// Pull request number to revert.
     #[arg(value_name = "NUMBER")]
@@ -22,12 +23,28 @@ pub struct RevertArgs {
     title: Option<String>,
 
     /// Body for the revert pull request.
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "body_file")]
     body: Option<String>,
+
+    /// Read body text from file (use "-" to read from standard input).
+    #[arg(short = 'F', long, conflicts_with = "body")]
+    body_file: Option<std::path::PathBuf>,
+
+    /// Skip prompts and open the text editor to write the body.
+    #[arg(short, long)]
+    editor: bool,
 
     /// Do not create a pull request, only create the revert branch.
     #[arg(long)]
     branch_only: bool,
+
+    /// Create the revert PR as a draft.
+    #[arg(short, long)]
+    draft: bool,
+
+    /// Open the revert PR in the web browser after creating.
+    #[arg(short, long)]
+    web: bool,
 }
 
 impl RevertArgs {
@@ -155,20 +172,34 @@ impl RevertArgs {
             .title
             .clone()
             .unwrap_or_else(|| format!("Revert \"{}\" (PR #{})", original_title, self.number));
-        let body = self.body.clone().unwrap_or_else(|| {
-            format!(
-                "Reverts {} (#{}).\n\nThis reverts merge commit {}.",
-                repo.full_name(),
-                self.number,
-                merge_commit_sha,
-            )
-        });
+
+        // Resolve body
+        let default_body = format!(
+            "Reverts {} (#{}).\n\nThis reverts merge commit {}.",
+            repo.full_name(),
+            self.number,
+            merge_commit_sha,
+        );
+
+        let body = if let Some(ref b) = self.body {
+            b.clone()
+        } else if let Some(ref body_file) = self.body_file {
+            crate::issue::create::read_body_file(body_file).context("failed to read body file")?
+        } else if self.editor {
+            let prompter = factory.prompter();
+            prompter
+                .editor("Revert PR body", &default_body, true)
+                .context("failed to read body from editor")?
+        } else {
+            default_body
+        };
 
         let pr_body = serde_json::json!({
             "title": title,
             "body": body,
             "head": revert_branch,
             "base": base_branch,
+            "draft": self.draft,
         });
 
         let create_path = format!("repos/{}/{}/pulls", repo.owner(), repo.name(),);
@@ -186,6 +217,10 @@ impl RevertArgs {
             cs.success_icon(),
         );
         ios_eprintln!(ios, "{html_url}");
+
+        if self.web && !html_url.is_empty() {
+            factory.browser().open(html_url)?;
+        }
 
         Ok(())
     }
@@ -216,7 +251,11 @@ mod tests {
             repo: "owner/repo".into(),
             title: None,
             body: None,
+            body_file: None,
+            editor: false,
             branch_only: false,
+            draft: false,
+            web: false,
         };
 
         let result = args.run(&h.factory).await;
@@ -235,7 +274,11 @@ mod tests {
             repo: "bad".into(),
             title: None,
             body: None,
+            body_file: None,
+            editor: false,
             branch_only: false,
+            draft: false,
+            web: false,
         };
 
         let result = args.run(&h.factory).await;

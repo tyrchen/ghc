@@ -18,6 +18,14 @@ pub struct ListArgs {
     /// Filter by visibility.
     #[arg(long, value_parser = ["public", "secret"])]
     visibility: Option<String>,
+
+    /// Include file content in the output.
+    #[arg(long)]
+    include_content: bool,
+
+    /// Filter gists by regex matching description or filenames.
+    #[arg(long, value_name = "PATTERN")]
+    filter: Option<String>,
 }
 
 impl ListArgs {
@@ -43,6 +51,13 @@ impl ListArgs {
             return Ok(());
         }
 
+        // Compile regex filter if provided
+        let filter_regex = if let Some(ref pattern) = self.filter {
+            Some(regex::Regex::new(pattern).context("invalid filter regex pattern")?)
+        } else {
+            None
+        };
+
         let cs = ios.color_scheme();
         let mut tp = TablePrinter::new(ios);
 
@@ -53,10 +68,8 @@ impl ListArgs {
                 .and_then(Value::as_str)
                 .unwrap_or("");
             let is_public = gist.get("public").and_then(Value::as_bool).unwrap_or(false);
-            let file_count = gist
-                .get("files")
-                .and_then(Value::as_object)
-                .map_or(0, serde_json::Map::len);
+            let files = gist.get("files").and_then(Value::as_object);
+            let file_count = files.map_or(0, serde_json::Map::len);
             let updated_at = gist.get("updated_at").and_then(Value::as_str).unwrap_or("");
 
             // Apply visibility filter
@@ -64,6 +77,16 @@ impl ListArgs {
                 Some("public") if !is_public => continue,
                 Some("secret") if is_public => continue,
                 _ => {}
+            }
+
+            // Apply regex filter
+            if let Some(ref re) = filter_regex {
+                let desc_matches = re.is_match(description);
+                let filename_matches =
+                    files.is_some_and(|f| f.keys().any(|name| re.is_match(name)));
+                if !desc_matches && !filename_matches {
+                    continue;
+                }
             }
 
             let visibility = if is_public {
@@ -90,7 +113,31 @@ impl ListArgs {
         let output = tp.render();
         ios_println!(ios, "{output}");
 
+        if self.include_content {
+            print_gist_contents(ios, &gists);
+        }
+
         Ok(())
+    }
+}
+
+/// Print gist file contents to stdout.
+fn print_gist_contents(ios: &ghc_core::iostreams::IOStreams, gists: &[Value]) {
+    let cs = ios.color_scheme();
+    for gist in gists {
+        let files = gist.get("files").and_then(Value::as_object);
+        if let Some(files) = files {
+            for (name, file_data) in files {
+                let content = file_data
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !content.is_empty() {
+                    ios_println!(ios, "\n{}", cs.bold(name));
+                    ios_println!(ios, "{content}");
+                }
+            }
+        }
     }
 }
 
@@ -128,6 +175,8 @@ mod tests {
         let args = ListArgs {
             limit: 10,
             visibility: None,
+            include_content: false,
+            filter: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -165,6 +214,46 @@ mod tests {
         let args = ListArgs {
             limit: 10,
             visibility: Some("public".into()),
+            include_content: false,
+            filter: None,
+        };
+        args.run(&h.factory).await.unwrap();
+
+        let out = h.stdout();
+        assert!(out.contains("abc123"));
+        assert!(!out.contains("def456"));
+    }
+
+    #[tokio::test]
+    async fn test_should_filter_gists_by_regex() {
+        let h = TestHarness::new().await;
+        mock_rest_get(
+            &h.server,
+            "/gists",
+            serde_json::json!([
+                {
+                    "id": "abc123",
+                    "description": "Rust utilities",
+                    "public": true,
+                    "files": {"utils.rs": {}},
+                    "updated_at": "2024-01-15T10:00:00Z"
+                },
+                {
+                    "id": "def456",
+                    "description": "Python scripts",
+                    "public": true,
+                    "files": {"script.py": {}},
+                    "updated_at": "2024-01-14T10:00:00Z"
+                }
+            ]),
+        )
+        .await;
+
+        let args = ListArgs {
+            limit: 10,
+            visibility: None,
+            include_content: false,
+            filter: Some("(?i)rust".into()),
         };
         args.run(&h.factory).await.unwrap();
 

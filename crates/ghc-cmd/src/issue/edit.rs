@@ -1,36 +1,41 @@
 //! `ghc issue edit` command.
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::Value;
 
-use ghc_core::text;
-use ghc_core::{ios_eprintln, ios_println};
+use ghc_core::ios_eprintln;
 
-/// Edit an issue.
+/// Edit one or more issues within the same repository.
 #[derive(Debug, Args)]
 pub struct EditArgs {
-    /// Issue number to edit.
-    #[arg(value_name = "NUMBER")]
-    number: i32,
+    /// Issue number(s) to edit.
+    #[arg(value_name = "NUMBER", required = true, num_args = 1..)]
+    numbers: Vec<i32>,
 
     /// Repository in OWNER/REPO format.
     #[arg(short = 'R', long)]
     repo: String,
 
     /// New title for the issue.
-    #[arg(long)]
+    #[arg(short, long)]
     title: Option<String>,
 
     /// New body for the issue.
-    #[arg(long)]
+    #[arg(short, long, conflicts_with = "body_file")]
     body: Option<String>,
 
-    /// Add assignees (comma-separated logins).
+    /// Read body text from file (use "-" to read from standard input).
+    #[arg(short = 'F', long, conflicts_with = "body")]
+    body_file: Option<PathBuf>,
+
+    /// Add assignees (comma-separated logins). Use "@me" to assign yourself.
     #[arg(long, value_delimiter = ',')]
     add_assignee: Vec<String>,
 
-    /// Remove assignees (comma-separated logins).
+    /// Remove assignees (comma-separated logins). Use "@me" to unassign yourself.
     #[arg(long, value_delimiter = ',')]
     remove_assignee: Vec<String>,
 
@@ -42,9 +47,21 @@ pub struct EditArgs {
     #[arg(long, value_delimiter = ',')]
     remove_label: Vec<String>,
 
+    /// Add the issue to projects (comma-separated titles).
+    #[arg(long, value_delimiter = ',')]
+    add_project: Vec<String>,
+
+    /// Remove the issue from projects (comma-separated titles).
+    #[arg(long, value_delimiter = ',')]
+    remove_project: Vec<String>,
+
     /// Set milestone name. Pass empty string to clear.
-    #[arg(long)]
+    #[arg(short, long, conflicts_with = "remove_milestone")]
     milestone: Option<String>,
+
+    /// Remove the milestone association from the issue.
+    #[arg(long, conflicts_with = "milestone")]
+    remove_milestone: bool,
 }
 
 impl EditArgs {
@@ -61,12 +78,58 @@ impl EditArgs {
         let ios = &factory.io;
         let cs = ios.color_scheme();
 
-        let path = format!(
-            "repos/{}/{}/issues/{}",
-            repo.owner(),
-            repo.name(),
-            self.number,
-        );
+        // Resolve body from --body-file if provided
+        let body_from_file = if let Some(ref body_file) = self.body_file {
+            Some(super::create::read_body_file(body_file).context("failed to read body file")?)
+        } else {
+            None
+        };
+
+        // Check that at least one field is being edited
+        let has_edits = self.title.is_some()
+            || self.body.is_some()
+            || body_from_file.is_some()
+            || !self.add_assignee.is_empty()
+            || !self.remove_assignee.is_empty()
+            || !self.add_label.is_empty()
+            || !self.remove_label.is_empty()
+            || !self.add_project.is_empty()
+            || !self.remove_project.is_empty()
+            || self.milestone.is_some()
+            || self.remove_milestone;
+
+        if !has_edits {
+            anyhow::bail!(
+                "no fields specified to edit; use --title, --body, --add-label, --add-assignee, or --milestone"
+            );
+        }
+
+        for &number in &self.numbers {
+            self.edit_single_issue(factory, &client, &repo, number, body_from_file.as_deref())
+                .await?;
+
+            ios_eprintln!(
+                ios,
+                "{} Edited issue #{number} in {}",
+                cs.success_icon(),
+                cs.bold(&repo.full_name()),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Edit a single issue with the configured changes.
+    #[allow(clippy::too_many_lines)]
+    async fn edit_single_issue(
+        &self,
+        _factory: &crate::factory::Factory,
+        client: &ghc_api::client::Client,
+        repo: &ghc_core::repo::Repo,
+        number: i32,
+        body_from_file: Option<&str>,
+    ) -> Result<()> {
+        let path = format!("repos/{}/{}/issues/{number}", repo.owner(), repo.name());
 
         // Build the update body with only specified fields
         let mut body = serde_json::Map::new();
@@ -77,13 +140,17 @@ impl EditArgs {
 
         if let Some(ref issue_body) = self.body {
             body.insert("body".to_string(), Value::String(issue_body.clone()));
+        } else if let Some(file_body) = body_from_file {
+            body.insert("body".to_string(), Value::String(file_body.to_string()));
         }
 
-        if let Some(ref milestone) = self.milestone {
+        if self.remove_milestone {
+            body.insert("milestone".to_string(), Value::Null);
+        } else if let Some(ref milestone) = self.milestone {
             if milestone.is_empty() {
                 body.insert("milestone".to_string(), Value::Null);
             } else {
-                let milestone_number = resolve_milestone_number(&client, &repo, milestone).await?;
+                let milestone_number = resolve_milestone_number(client, repo, milestone).await?;
                 body.insert(
                     "milestone".to_string(),
                     Value::Number(serde_json::Number::from(milestone_number)),
@@ -93,21 +160,36 @@ impl EditArgs {
 
         // Handle assignee changes
         if !self.add_assignee.is_empty() || !self.remove_assignee.is_empty() {
-            let current_assignees = fetch_current_assignees(&client, &repo, self.number).await?;
+            // Resolve @me to the current user's login
+            let mut add_logins: Vec<String> = self.add_assignee.clone();
+            let mut remove_logins: Vec<String> = self.remove_assignee.clone();
+
+            let has_at_me =
+                add_logins.iter().any(|l| l == "@me") || remove_logins.iter().any(|l| l == "@me");
+            if has_at_me {
+                let me = resolve_current_user(client).await?;
+                for login in &mut add_logins {
+                    if login == "@me" {
+                        login.clone_from(&me);
+                    }
+                }
+                for login in &mut remove_logins {
+                    if login == "@me" {
+                        login.clone_from(&me);
+                    }
+                }
+            }
+
+            let current_assignees = fetch_current_assignees(client, repo, number).await?;
             let mut assignees: Vec<String> = current_assignees;
 
-            for login in &self.add_assignee {
+            for login in &add_logins {
                 if !assignees.iter().any(|a| a.eq_ignore_ascii_case(login)) {
                     assignees.push(login.clone());
                 }
             }
 
-            assignees.retain(|a| {
-                !self
-                    .remove_assignee
-                    .iter()
-                    .any(|r| r.eq_ignore_ascii_case(a))
-            });
+            assignees.retain(|a| !remove_logins.iter().any(|r| r.eq_ignore_ascii_case(a)));
 
             body.insert(
                 "assignees".to_string(),
@@ -117,7 +199,7 @@ impl EditArgs {
 
         // Handle label changes
         if !self.add_label.is_empty() || !self.remove_label.is_empty() {
-            let current_labels = fetch_current_labels(&client, &repo, self.number).await?;
+            let current_labels = fetch_current_labels(client, repo, number).await?;
             let mut labels = current_labels;
 
             for label in &self.add_label {
@@ -134,32 +216,28 @@ impl EditArgs {
             );
         }
 
-        if body.is_empty() {
-            anyhow::bail!(
-                "no fields specified to edit; use --title, --body, --add-label, --add-assignee, or --milestone"
-            );
+        if !body.is_empty() {
+            let request_body = Value::Object(body);
+            let _: Value = client
+                .rest(reqwest::Method::PATCH, &path, Some(&request_body))
+                .await
+                .context("failed to edit issue")?;
         }
-
-        let request_body = Value::Object(body);
-
-        let result: Value = client
-            .rest(reqwest::Method::PATCH, &path, Some(&request_body))
-            .await
-            .context("failed to edit issue")?;
-
-        let html_url = result.get("html_url").and_then(Value::as_str).unwrap_or("");
-
-        ios_eprintln!(
-            ios,
-            "{} Edited issue #{} in {}",
-            cs.success_icon(),
-            self.number,
-            cs.bold(&repo.full_name()),
-        );
-        ios_println!(ios, "{}", text::display_url(html_url));
 
         Ok(())
     }
+}
+
+/// Resolve the current authenticated user's login via GET /user.
+async fn resolve_current_user(client: &ghc_api::client::Client) -> Result<String> {
+    let user: Value = client
+        .rest(reqwest::Method::GET, "user", None::<&Value>)
+        .await
+        .context("failed to fetch current user")?;
+    user.get("login")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("could not determine current user login"))
+        .map(str::to_string)
 }
 
 /// Fetch the current assignees for an issue.
@@ -258,15 +336,19 @@ mod tests {
 
     fn default_args(number: i32, repo: &str) -> EditArgs {
         EditArgs {
-            number,
+            numbers: vec![number],
             repo: repo.to_string(),
             title: None,
             body: None,
+            body_file: None,
             add_assignee: vec![],
             remove_assignee: vec![],
             add_label: vec![],
             remove_label: vec![],
+            add_project: vec![],
+            remove_project: vec![],
             milestone: None,
+            remove_milestone: false,
         }
     }
 
@@ -292,11 +374,6 @@ mod tests {
             err.contains("Edited issue #7"),
             "should show edited message"
         );
-        let out = h.stdout();
-        assert!(
-            out.contains("github.com/owner/repo/issues/7"),
-            "should contain issue URL"
-        );
     }
 
     #[tokio::test]
@@ -311,5 +388,58 @@ mod tests {
                 .to_string()
                 .contains("no fields specified")
         );
+    }
+
+    #[tokio::test]
+    async fn test_should_edit_multiple_issues() {
+        let h = TestHarness::new().await;
+        mock_rest_patch(
+            &h.server,
+            "/repos/owner/repo/issues/7",
+            200,
+            serde_json::json!({
+                "html_url": "https://github.com/owner/repo/issues/7"
+            }),
+        )
+        .await;
+        mock_rest_patch(
+            &h.server,
+            "/repos/owner/repo/issues/8",
+            200,
+            serde_json::json!({
+                "html_url": "https://github.com/owner/repo/issues/8"
+            }),
+        )
+        .await;
+
+        let mut args = default_args(7, "owner/repo");
+        args.numbers = vec![7, 8];
+        args.title = Some("Batch Title".to_string());
+        args.run(&h.factory).await.unwrap();
+
+        let err = h.stderr();
+        assert!(err.contains("Edited issue #7"), "should show first: {err}");
+        assert!(err.contains("Edited issue #8"), "should show second: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_should_remove_milestone() {
+        let h = TestHarness::new().await;
+        mock_rest_patch(
+            &h.server,
+            "/repos/owner/repo/issues/7",
+            200,
+            serde_json::json!({
+                "html_url": "https://github.com/owner/repo/issues/7"
+            }),
+        )
+        .await;
+
+        let mut args = default_args(7, "owner/repo");
+        args.remove_milestone = true;
+        args.run(&h.factory).await.unwrap();
+
+        let err = h.stderr();
+        assert!(err.contains("Edited issue #7"), "should show edited: {err}");
     }
 }

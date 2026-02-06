@@ -136,6 +136,16 @@ mod tests {
             Ok(())
         }
 
+        fn users_for_host(&self, _hostname: &str) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn token_for_user(&self, hostname: &str, _username: &str) -> Option<(String, String)> {
+            self.tokens
+                .get(hostname)
+                .map(|t| (t.clone(), "config".to_string()))
+        }
+
         fn logout(&mut self, _hostname: &str, _username: &str) -> anyhow::Result<()> {
             Ok(())
         }

@@ -146,6 +146,18 @@ pub trait AuthConfig: Send + Sync + std::fmt::Debug {
     ///
     /// Returns an error if the user cannot be switched.
     fn switch_user(&mut self, hostname: &str, username: &str) -> anyhow::Result<()>;
+
+    /// Get all known usernames for a host.
+    fn users_for_host(&self, hostname: &str) -> Vec<String>;
+
+    /// Get the token and source for a specific user on a host.
+    /// Returns (token, source, found).
+    fn token_for_user(&self, hostname: &str, username: &str) -> Option<(String, String)>;
+
+    /// Get the default host. Returns the first configured host.
+    fn default_host(&self) -> Option<String> {
+        self.hosts().into_iter().next()
+    }
 }
 
 /// Cache directory path.

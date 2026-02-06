@@ -319,6 +319,33 @@ impl AuthConfig for FileConfig {
 
         self.write()
     }
+
+    fn users_for_host(&self, hostname: &str) -> Vec<String> {
+        let Some(host) = self.hosts.get(hostname) else {
+            return Vec::new();
+        };
+        let mut users: Vec<String> = host.users.keys().cloned().collect();
+        // Include the active user if not already in the users map
+        if let Some(ref active) = host.user
+            && !users.contains(active)
+        {
+            users.push(active.clone());
+        }
+        users
+    }
+
+    fn token_for_user(&self, hostname: &str, username: &str) -> Option<(String, String)> {
+        let host = self.hosts.get(hostname)?;
+        // Check if it's the active user first
+        if host.user.as_deref() == Some(username) {
+            let token = host.oauth_token.as_ref()?;
+            return Some((token.clone(), "config".to_string()));
+        }
+        // Check the users map
+        let entry = host.users.get(username)?;
+        let token = entry.oauth_token.as_ref()?;
+        Some((token.clone(), "config".to_string()))
+    }
 }
 
 #[cfg(test)]

@@ -33,8 +33,14 @@ impl CodeArgs {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("codespace name required (use -c NAME)"))?;
 
+        let encoded_name: String =
+            url::form_urlencoded::byte_serialize(codespace_name.as_bytes()).collect();
+
         if self.web {
-            let url = format!("https://github.com/codespaces/{codespace_name}?editor=vscode",);
+            let mut url = format!("https://github.com/codespaces/{encoded_name}?editor=vscode");
+            if self.insiders {
+                url.push_str("&vscodeChannel=insiders");
+            }
             factory.browser().open(&url)?;
             return Ok(());
         }
@@ -45,7 +51,8 @@ impl CodeArgs {
             "vscode"
         };
 
-        let url = format!("{scheme}://github.codespaces/connect?name={codespace_name}",);
+        let url =
+            format!("{scheme}://github.codespaces/connect?name={encoded_name}&windowId=_blank");
         factory.browser().open(&url)?;
 
         let ios = &factory.io;

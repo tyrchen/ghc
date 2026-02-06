@@ -4,12 +4,21 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use clap::Args;
+use serde::Deserialize;
 use serde_json::Value;
 
 use ghc_core::ios_println;
 use ghc_core::text;
 
+use crate::factory::Factory;
+
 /// View a repository.
+///
+/// Display the description and the README of a GitHub repository.
+///
+/// With `--web`, open the repository in a web browser instead.
+///
+/// With `--branch`, view a specific branch of the repository.
 #[derive(Debug, Args)]
 pub struct ViewArgs {
     /// Repository to view (OWNER/REPO).
@@ -20,14 +29,28 @@ pub struct ViewArgs {
     #[arg(short, long)]
     web: bool,
 
+    /// View a specific branch of the repository.
+    #[arg(short, long)]
+    branch: Option<String>,
+
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
 }
 
+/// README content fetched from the REST API.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct ReadmeResponse {
+    name: String,
+    content: String,
+    html_url: String,
+}
+
 impl ViewArgs {
     /// Run the repo view command.
-    pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
+    #[allow(clippy::too_many_lines)]
+    pub async fn run(&self, factory: &Factory) -> Result<()> {
         let repo = match &self.repo {
             Some(r) => {
                 ghc_core::repo::Repo::from_full_name(r).context("invalid repository format")?
@@ -37,9 +60,28 @@ impl ViewArgs {
             }
         };
 
+        // Build URL with optional branch
+        let open_url = if let Some(ref branch) = self.branch {
+            format!(
+                "https://{}/{}/{}/tree/{}",
+                repo.host(),
+                repo.owner(),
+                repo.name(),
+                urlencoding::encode(branch),
+            )
+        } else {
+            format!("https://{}/{}/{}", repo.host(), repo.owner(), repo.name())
+        };
+
         if self.web {
-            let url = format!("https://{}/{}/{}", repo.host(), repo.owner(), repo.name());
-            factory.browser().open(&url)?;
+            if factory.io.is_stdout_tty() {
+                ghc_core::ios_eprintln!(
+                    factory.io,
+                    "Opening {} in your browser.",
+                    text::display_url(&open_url),
+                );
+            }
+            factory.browser().open(&open_url)?;
             return Ok(());
         }
 
@@ -65,6 +107,9 @@ impl ViewArgs {
             ios_println!(ios, "{}", serde_json::to_string_pretty(repo_data)?);
             return Ok(());
         }
+
+        // Fetch README via REST API
+        let readme_content = self.fetch_readme(&client, &repo).await;
 
         let cs = ios.color_scheme();
 
@@ -107,6 +152,17 @@ impl ViewArgs {
             .and_then(Value::as_str)
             .unwrap_or("");
 
+        if !ios.is_stdout_tty() {
+            // Machine-readable output (non-TTY)
+            ios_println!(ios, "name:\t{owner_login}/{name}");
+            ios_println!(ios, "description:\t{description}");
+            if let Some(ref content) = readme_content {
+                ios_println!(ios, "--");
+                ios_println!(ios, "{content}");
+            }
+            return Ok(());
+        }
+
         ios_println!(
             ios,
             "{}\n{}\n",
@@ -133,9 +189,45 @@ impl ViewArgs {
         }
         ios_println!(ios, "Stars: {stars}  Forks: {forks}");
         ios_println!(ios, "Default branch: {default_branch}");
+
+        // Display README
+        if let Some(ref content) = readme_content {
+            ios_println!(ios, "");
+            ios_println!(ios, "{content}");
+        } else {
+            ios_println!(ios, "");
+            ios_println!(ios, "{}", cs.gray("This repository does not have a README"));
+        }
+
         ios_println!(ios, "\n{}", text::display_url(url));
 
         Ok(())
+    }
+
+    /// Fetch the README from the REST API.
+    async fn fetch_readme(
+        &self,
+        client: &ghc_api::client::Client,
+        repo: &ghc_core::repo::Repo,
+    ) -> Option<String> {
+        let mut path = format!("repos/{}/{}/readme", repo.owner(), repo.name());
+        if let Some(ref branch) = self.branch {
+            path = format!("{path}?ref={branch}");
+        }
+
+        let response: Result<ReadmeResponse, _> =
+            client.rest(reqwest::Method::GET, &path, None).await;
+
+        match response {
+            Ok(readme) => {
+                // README content is base64-encoded
+                let bytes =
+                    ghc_core::text::base64_decode(&readme.content.replace('\n', "")).ok()?;
+                let text = String::from_utf8(bytes).ok()?;
+                if text.is_empty() { None } else { Some(text) }
+            }
+            Err(_) => None,
+        }
     }
 }
 
@@ -158,17 +250,21 @@ mod tests {
         let args = ViewArgs {
             repo: Some("owner/repo".into()),
             web: false,
+            branch: None,
             json: vec![],
         };
         args.run(&h.factory).await.unwrap();
 
+        // Non-TTY mode outputs machine-readable format
         let out = h.stdout();
-        assert!(out.contains("owner/repo"));
-        assert!(out.contains("A test repository"));
-        assert!(out.contains("public"));
-        assert!(out.contains("Stars: 42"));
-        assert!(out.contains("Forks: 5"));
-        assert!(out.contains("Rust"));
+        assert!(
+            out.contains("owner/repo"),
+            "should contain repo name: {out}"
+        );
+        assert!(
+            out.contains("A test repository"),
+            "should contain description: {out}"
+        );
     }
 
     #[tokio::test]
@@ -178,6 +274,7 @@ mod tests {
         let args = ViewArgs {
             repo: Some("owner/repo".into()),
             web: true,
+            branch: None,
             json: vec![],
         };
         args.run(&h.factory).await.unwrap();
@@ -185,6 +282,23 @@ mod tests {
         let urls = h.opened_urls();
         assert_eq!(urls.len(), 1);
         assert!(urls[0].contains("owner/repo"));
+    }
+
+    #[tokio::test]
+    async fn test_should_view_repository_in_browser_with_branch() {
+        let h = TestHarness::new().await;
+
+        let args = ViewArgs {
+            repo: Some("owner/repo".into()),
+            web: true,
+            branch: Some("develop".into()),
+            json: vec![],
+        };
+        args.run(&h.factory).await.unwrap();
+
+        let urls = h.opened_urls();
+        assert_eq!(urls.len(), 1);
+        assert!(urls[0].contains("owner/repo/tree/develop"));
     }
 
     #[tokio::test]
@@ -200,6 +314,7 @@ mod tests {
         let args = ViewArgs {
             repo: Some("owner/repo".into()),
             web: false,
+            branch: None,
             json: vec!["name".into()],
         };
         args.run(&h.factory).await.unwrap();
@@ -216,6 +331,7 @@ mod tests {
         let args = ViewArgs {
             repo: None,
             web: false,
+            branch: None,
             json: vec![],
         };
         let result = args.run(&h.factory).await;

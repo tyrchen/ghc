@@ -24,6 +24,10 @@ pub struct TokenArgs {
     /// The account to output the token for.
     #[arg(short, long = "user")]
     user: Option<String>,
+
+    /// Search only secure credential store for authentication token.
+    #[arg(long, hide = true)]
+    secure_storage: bool,
 }
 
 impl TokenArgs {
@@ -42,14 +46,19 @@ impl TokenArgs {
         let hostname = if let Some(h) = &self.hostname {
             instance::normalize_hostname(h)
         } else {
-            let hosts = cfg.hosts();
-            hosts
-                .into_iter()
-                .next()
+            cfg.authentication()
+                .default_host()
                 .unwrap_or_else(|| instance::GITHUB_COM.to_string())
         };
 
-        let token = cfg.authentication().active_token(&hostname).map(|(t, _)| t);
+        // Look up token based on --user flag
+        let token = if let Some(ref user) = self.user {
+            cfg.authentication()
+                .token_for_user(&hostname, user)
+                .map(|(t, _)| t)
+        } else {
+            cfg.authentication().active_token(&hostname).map(|(t, _)| t)
+        };
 
         match token {
             Some(val) if !val.is_empty() => {
@@ -71,7 +80,7 @@ impl TokenArgs {
 mod tests {
     use super::*;
 
-    use ghc_core::config::MemoryConfig;
+    use ghc_core::config::{AuthConfig, MemoryConfig};
 
     use crate::test_helpers::TestHarness;
 
@@ -82,6 +91,7 @@ mod tests {
         let args = TokenArgs {
             hostname: None,
             user: None,
+            secure_storage: false,
         };
         args.run(&h.factory).unwrap();
         assert_eq!(h.stdout().trim(), "ghp_secret123");
@@ -96,6 +106,7 @@ mod tests {
         let args = TokenArgs {
             hostname: Some("ghe.corp.com".to_string()),
             user: None,
+            secure_storage: false,
         };
         args.run(&h.factory).unwrap();
         assert_eq!(h.stdout().trim(), "ghp_token2");
@@ -108,9 +119,49 @@ mod tests {
         let args = TokenArgs {
             hostname: None,
             user: None,
+            secure_storage: false,
         };
         let result = args.run(&h.factory);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("no oauth token"));
+    }
+
+    #[tokio::test]
+    async fn test_should_print_token_for_specific_user() {
+        let mut config = MemoryConfig::new();
+        config
+            .login("github.com", "user1", "ghp_token_user1", "https")
+            .unwrap();
+        config
+            .login("github.com", "user2", "ghp_token_user2", "https")
+            .unwrap();
+        let h = TestHarness::with_config(config).await;
+
+        let args = TokenArgs {
+            hostname: Some("github.com".to_string()),
+            user: Some("user1".to_string()),
+            secure_storage: false,
+        };
+        args.run(&h.factory).unwrap();
+        assert_eq!(h.stdout().trim(), "ghp_token_user1");
+    }
+
+    #[tokio::test]
+    async fn test_should_error_for_unknown_user() {
+        let config = MemoryConfig::new().with_host("github.com", "testuser", "ghp_token1");
+        let h = TestHarness::with_config(config).await;
+        let args = TokenArgs {
+            hostname: Some("github.com".to_string()),
+            user: Some("ghost".to_string()),
+            secure_storage: false,
+        };
+        let result = args.run(&h.factory);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no oauth token found for github.com account ghost")
+        );
     }
 }

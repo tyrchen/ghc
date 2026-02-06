@@ -1,5 +1,7 @@
 //! `ghc pr edit` command.
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::Value;
@@ -22,8 +24,12 @@ pub struct EditArgs {
     title: Option<String>,
 
     /// New body.
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "body_file")]
     body: Option<String>,
+
+    /// Read body text from file (use "-" to read from standard input).
+    #[arg(short = 'F', long, conflicts_with = "body")]
+    body_file: Option<PathBuf>,
 
     /// New base branch.
     #[arg(short = 'B', long)]
@@ -37,11 +43,11 @@ pub struct EditArgs {
     #[arg(long, value_delimiter = ',')]
     remove_label: Vec<String>,
 
-    /// Add assignees (comma-separated).
+    /// Add assignees (comma-separated). Use "@me" to assign yourself.
     #[arg(long, value_delimiter = ',')]
     add_assignee: Vec<String>,
 
-    /// Remove assignees (comma-separated).
+    /// Remove assignees (comma-separated). Use "@me" to unassign yourself.
     #[arg(long, value_delimiter = ',')]
     remove_assignee: Vec<String>,
 
@@ -53,9 +59,21 @@ pub struct EditArgs {
     #[arg(long, value_delimiter = ',')]
     remove_reviewer: Vec<String>,
 
+    /// Add the pull request to projects (comma-separated titles).
+    #[arg(long, value_delimiter = ',')]
+    add_project: Vec<String>,
+
+    /// Remove the pull request from projects (comma-separated titles).
+    #[arg(long, value_delimiter = ',')]
+    remove_project: Vec<String>,
+
     /// Set milestone name or number.
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "remove_milestone")]
     milestone: Option<String>,
+
+    /// Remove the milestone association from the pull request.
+    #[arg(long, conflicts_with = "milestone")]
+    remove_milestone: bool,
 }
 
 impl EditArgs {
@@ -72,6 +90,16 @@ impl EditArgs {
         let ios = &factory.io;
         let cs = ios.color_scheme();
 
+        // Resolve body from --body-file if provided
+        let body_from_file = if let Some(ref body_file) = self.body_file {
+            Some(
+                crate::issue::create::read_body_file(body_file)
+                    .context("failed to read body file")?,
+            )
+        } else {
+            None
+        };
+
         // Update PR fields if any are specified
         let mut pr_update = serde_json::Map::new();
         if let Some(ref title) = self.title {
@@ -79,11 +107,15 @@ impl EditArgs {
         }
         if let Some(ref body) = self.body {
             pr_update.insert("body".to_string(), Value::String(body.clone()));
+        } else if let Some(ref body) = body_from_file {
+            pr_update.insert("body".to_string(), Value::String(body.clone()));
         }
         if let Some(ref base) = self.base {
             pr_update.insert("base".to_string(), Value::String(base.clone()));
         }
-        if let Some(ref milestone) = self.milestone
+        if self.remove_milestone {
+            pr_update.insert("milestone".to_string(), Value::Null);
+        } else if let Some(ref milestone) = self.milestone
             && let Ok(num) = milestone.parse::<u64>()
         {
             pr_update.insert(
@@ -227,6 +259,27 @@ mod tests {
     use super::*;
     use crate::test_helpers::{TestHarness, mock_rest_patch};
 
+    fn default_edit_args(number: i64, repo: &str) -> EditArgs {
+        EditArgs {
+            number,
+            repo: repo.into(),
+            title: None,
+            body: None,
+            body_file: None,
+            base: None,
+            add_label: vec![],
+            remove_label: vec![],
+            add_assignee: vec![],
+            remove_assignee: vec![],
+            add_reviewer: vec![],
+            remove_reviewer: vec![],
+            add_project: vec![],
+            remove_project: vec![],
+            milestone: None,
+            remove_milestone: false,
+        }
+    }
+
     #[tokio::test]
     async fn test_should_edit_pull_request_title() {
         let h = TestHarness::new().await;
@@ -238,21 +291,8 @@ mod tests {
         )
         .await;
 
-        let args = EditArgs {
-            number: 3,
-            repo: "owner/repo".into(),
-            title: Some("Updated title".into()),
-            body: None,
-            base: None,
-            add_label: vec![],
-            remove_label: vec![],
-            add_assignee: vec![],
-            remove_assignee: vec![],
-            add_reviewer: vec![],
-            remove_reviewer: vec![],
-            milestone: None,
-        };
-
+        let mut args = default_edit_args(3, "owner/repo");
+        args.title = Some("Updated title".into());
         args.run(&h.factory).await.unwrap();
         let err = h.stderr();
         assert!(
@@ -274,21 +314,8 @@ mod tests {
         )
         .await;
 
-        let args = EditArgs {
-            number: 3,
-            repo: "owner/repo".into(),
-            title: None,
-            body: None,
-            base: None,
-            add_label: vec!["bug".into()],
-            remove_label: vec![],
-            add_assignee: vec![],
-            remove_assignee: vec![],
-            add_reviewer: vec![],
-            remove_reviewer: vec![],
-            milestone: None,
-        };
-
+        let mut args = default_edit_args(3, "owner/repo");
+        args.add_label = vec!["bug".into()];
         args.run(&h.factory).await.unwrap();
         let err = h.stderr();
         assert!(
@@ -300,21 +327,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_return_error_on_invalid_repo_for_edit() {
         let h = TestHarness::new().await;
-        let args = EditArgs {
-            number: 1,
-            repo: "bad".into(),
-            title: None,
-            body: None,
-            base: None,
-            add_label: vec![],
-            remove_label: vec![],
-            add_assignee: vec![],
-            remove_assignee: vec![],
-            add_reviewer: vec![],
-            remove_reviewer: vec![],
-            milestone: None,
-        };
-
+        let args = default_edit_args(1, "bad");
         let result = args.run(&h.factory).await;
         assert!(result.is_err());
     }
