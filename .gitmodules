@@ -1,0 +1,3 @@
+[submodule "vendors/cli"]
+	path = vendors/cli
+	url = https://github.com/cli/cli
