@@ -285,26 +285,22 @@ fn copy_to_system_clipboard(text: &str) -> anyhow::Result<()> {
             .args(["-selection", "clipboard"])
             .stdin(std::process::Stdio::piped())
             .spawn();
-        match result {
-            Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin.write_all(text.as_bytes())?;
-                }
-                child.wait()?;
-                return Ok(());
+        if let Ok(mut child) = result {
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(text.as_bytes())?;
             }
-            Err(_) => {
-                let mut child = std::process::Command::new("xsel")
-                    .args(["--clipboard", "--input"])
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()?;
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin.write_all(text.as_bytes())?;
-                }
-                child.wait()?;
-                return Ok(());
-            }
+            child.wait()?;
+            return Ok(());
         }
+        let mut child = std::process::Command::new("xsel")
+            .args(["--clipboard", "--input"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes())?;
+        }
+        child.wait()?;
+        return Ok(());
     }
 
     #[cfg(target_os = "windows")]
