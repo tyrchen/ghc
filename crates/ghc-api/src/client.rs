@@ -5,9 +5,11 @@
 //! suggestions.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use regex::Regex;
 use reqwest::header::HeaderMap;
+use secrecy::{ExposeSecret, SecretString};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tracing::warn;
@@ -22,18 +24,32 @@ const MAX_RETRIES: u32 = 3;
 const RETRY_BASE_DELAY_MS: u64 = 1000;
 
 /// GitHub API client wrapping reqwest with auth and error handling.
-#[derive(Debug, Clone)]
+///
+/// Tokens are stored as [`SecretString`] to prevent accidental logging or
+/// exposure through `Debug` output.
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     hostname: String,
-    token: Option<String>,
+    token: Option<SecretString>,
     /// Optional base URL override for testing (e.g., `"http://127.0.0.1:PORT/"`).
     /// When set, REST and GraphQL requests use this instead of the real GitHub URLs.
     api_url_override: Option<String>,
 }
 
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("hostname", &self.hostname)
+            .field("token", &self.token.as_ref().map(|_| "[REDACTED]"))
+            .field("api_url_override", &self.api_url_override)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A page of results from a REST API endpoint with a link to the next page.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct RestPage<T> {
     /// The deserialized response body.
     pub data: T,
@@ -44,6 +60,7 @@ pub struct RestPage<T> {
 /// GraphQL page info for cursor-based pagination.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PageInfo {
     /// Whether there is a next page.
     pub has_next_page: bool,
@@ -53,7 +70,10 @@ pub struct PageInfo {
 
 impl Client {
     /// Create a new API client for a specific hostname.
-    pub fn new(http: reqwest::Client, hostname: &str, token: Option<String>) -> Self {
+    ///
+    /// Tokens are wrapped in [`SecretString`] to prevent accidental leaking.
+    /// Use `.into()` to convert a plain `String` to `SecretString`.
+    pub fn new(http: reqwest::Client, hostname: &str, token: Option<SecretString>) -> Self {
         Self {
             http,
             hostname: instance::normalize_hostname(hostname),
@@ -79,15 +99,17 @@ impl Client {
     }
 
     /// Get the token this client is configured with.
+    ///
+    /// Callers must be careful not to log or display the returned value.
     pub fn token(&self) -> Option<&str> {
-        self.token.as_deref()
+        self.token.as_ref().map(ExposeSecret::expose_secret)
     }
 
     /// Build a request with authentication headers applied.
     fn authed_request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
         let mut req = self.http.request(method, url);
         if let Some(ref token) = self.token {
-            req = req.header("Authorization", format!("token {token}"));
+            req = req.header("Authorization", format!("token {}", token.expose_secret()));
         }
         req
     }
@@ -172,28 +194,8 @@ impl Client {
     ) -> Result<T, ApiError> {
         let url = self.resolve_rest_url(path);
         let resp = self.send_rest_request(method, &url, body).await?;
-        let status = resp.status();
-        let headers = resp.headers().clone();
-
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            let suggestion = generate_scopes_suggestion(
-                status.as_u16(),
-                headers
-                    .get("x-accepted-oauth-scopes")
-                    .and_then(|v| v.to_str().ok()),
-                headers.get("x-oauth-scopes").and_then(|v| v.to_str().ok()),
-            );
-            return Err(ApiError::Http {
-                status: status.as_u16(),
-                message: text,
-                scopes_suggestion: suggestion,
-                headers: extract_header_map(&headers),
-            });
-        }
-
-        let result: T = resp.json().await?;
-        Ok(result)
+        let resp = Self::check_response(resp, true).await?;
+        Ok(resp.json().await?)
     }
 
     /// Execute a REST API request and return the raw response body as string.
@@ -209,26 +211,7 @@ impl Client {
     ) -> Result<String, ApiError> {
         let url = self.resolve_rest_url(path);
         let resp = self.send_rest_request(method, &url, body).await?;
-        let status = resp.status();
-        let headers = resp.headers().clone();
-
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            let suggestion = generate_scopes_suggestion(
-                status.as_u16(),
-                headers
-                    .get("x-accepted-oauth-scopes")
-                    .and_then(|v| v.to_str().ok()),
-                headers.get("x-oauth-scopes").and_then(|v| v.to_str().ok()),
-            );
-            return Err(ApiError::Http {
-                status: status.as_u16(),
-                message: text,
-                scopes_suggestion: suggestion,
-                headers: extract_header_map(&headers),
-            });
-        }
-
+        let resp = Self::check_response(resp, true).await?;
         Ok(resp.text().await?)
     }
 
@@ -247,27 +230,9 @@ impl Client {
     ) -> Result<RestPage<T>, ApiError> {
         let url = self.resolve_rest_url(path);
         let resp = self.send_rest_request(method, &url, body).await?;
-        let status = resp.status();
-        let headers = resp.headers().clone();
+        let resp = Self::check_response(resp, true).await?;
 
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            let suggestion = generate_scopes_suggestion(
-                status.as_u16(),
-                headers
-                    .get("x-accepted-oauth-scopes")
-                    .and_then(|v| v.to_str().ok()),
-                headers.get("x-oauth-scopes").and_then(|v| v.to_str().ok()),
-            );
-            return Err(ApiError::Http {
-                status: status.as_u16(),
-                message: text,
-                scopes_suggestion: suggestion,
-                headers: extract_header_map(&headers),
-            });
-        }
-
-        if status == reqwest::StatusCode::NO_CONTENT {
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
             // For 204 responses, try to return default-ish data
             let text = resp.text().await.unwrap_or_default();
             let data: T = serde_json::from_str(&text)?;
@@ -277,7 +242,7 @@ impl Client {
             });
         }
 
-        let next_url = parse_link_next(&headers);
+        let next_url = parse_link_next(resp.headers());
         let data: T = resp.json().await?;
 
         Ok(RestPage { data, next_url })
@@ -368,20 +333,10 @@ impl Client {
             .send()
             .await?;
 
-        let status = resp.status();
-        let headers = resp.headers().clone();
+        let resp = Self::check_response(resp, false).await?;
 
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(ApiError::Http {
-                status: status.as_u16(),
-                message: text,
-                scopes_suggestion: None,
-                headers: extract_header_map(&headers),
-            });
-        }
-
-        let scopes = headers
+        let scopes = resp
+            .headers()
             .get("x-oauth-scopes")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
@@ -424,49 +379,95 @@ impl Client {
 
     /// Get the currently authenticated user's login using a specific token.
     ///
+    /// Creates a temporary client with the given token and delegates to
+    /// [`current_login`](Self::current_login).
+    ///
     /// # Errors
     ///
     /// Returns an error on network failure or auth issues.
     pub async fn current_login_with_token(&self, token: &str) -> Result<String, ApiError> {
-        #[derive(serde::Deserialize)]
-        struct Wrapper {
-            data: DataInner,
-        }
-        #[derive(serde::Deserialize)]
-        struct DataInner {
-            viewer: ViewerLogin,
-        }
-        #[derive(serde::Deserialize)]
-        struct ViewerLogin {
-            login: String,
-        }
+        let temp_client = Self {
+            http: self.http.clone(),
+            hostname: self.hostname.clone(),
+            token: Some(token.into()),
+            api_url_override: self.api_url_override.clone(),
+        };
+        temp_client.current_login().await
+    }
 
-        let url = instance::graphql_url(&self.hostname);
-        let body = serde_json::json!({
-            "query": "query UserCurrent { viewer { login } }",
-        });
+    /// Upload a binary asset to a GitHub release.
+    ///
+    /// Sends raw bytes with the given content type (typically
+    /// `application/octet-stream`) to the specified upload URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on network failure or non-success status.
+    pub async fn upload_asset(
+        &self,
+        upload_url: &str,
+        data: Vec<u8>,
+        content_type: &str,
+    ) -> Result<Value, ApiError> {
+        let url = self.resolve_rest_url(upload_url);
+        let mut req = self.authed_request(reqwest::Method::POST, &url);
+        req = req.header("Content-Type", content_type).body(data);
 
-        let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("token {token}"))
-            .json(&body)
-            .send()
-            .await?;
+        let resp = req.send().await?;
+        let resp = Self::check_response(resp, true).await?;
+        Ok(resp.json().await?)
+    }
 
+    /// Execute a REST API request and return the raw response body as bytes.
+    ///
+    /// Use this for downloading binary content (e.g., release assets) to
+    /// avoid UTF-8 encoding corruption.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on network failure or non-success status.
+    pub async fn rest_bytes(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<Vec<u8>, ApiError> {
+        let url = self.resolve_rest_url(path);
+        let resp = self.send_rest_request(method, &url, None).await?;
+        let resp = Self::check_response(resp, true).await?;
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// Check a response for errors and return an `ApiError::Http` if the
+    /// status is not successful. The `include_scopes` flag controls whether
+    /// OAuth scope suggestion headers are inspected.
+    async fn check_response(
+        resp: reqwest::Response,
+        include_scopes: bool,
+    ) -> Result<reqwest::Response, ApiError> {
         let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            return Err(ApiError::Http {
-                status: status.as_u16(),
-                message: text,
-                scopes_suggestion: None,
-                headers: HashMap::new(),
-            });
+        if status.is_success() {
+            return Ok(resp);
         }
 
-        let wrapper: Wrapper = resp.json().await?;
-        Ok(wrapper.data.viewer.login)
+        let headers = resp.headers().clone();
+        let text = resp.text().await.unwrap_or_default();
+        let suggestion = if include_scopes {
+            generate_scopes_suggestion(
+                status.as_u16(),
+                headers
+                    .get("x-accepted-oauth-scopes")
+                    .and_then(|v| v.to_str().ok()),
+                headers.get("x-oauth-scopes").and_then(|v| v.to_str().ok()),
+            )
+        } else {
+            None
+        };
+        Err(ApiError::Http {
+            status: status.as_u16(),
+            message: text,
+            scopes_suggestion: suggestion,
+            headers: extract_header_map(&headers),
+        })
     }
 
     fn resolve_rest_url(&self, path: &str) -> String {
@@ -495,12 +496,16 @@ impl Client {
     }
 }
 
+/// Regex for parsing RFC 5988 `Link` header relations.
+static LINK_REL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<([^>]+)>;\s*rel="([^"]+)""#).expect("LINK_REL_RE is a valid regex")
+});
+
 /// Parse the `Link` header to extract the `next` page URL.
 fn parse_link_next(headers: &HeaderMap) -> Option<String> {
     let link_header = headers.get("link")?.to_str().ok()?;
-    let re = Regex::new(r#"<([^>]+)>;\s*rel="([^"]+)""#).ok()?;
 
-    for cap in re.captures_iter(link_header) {
+    for cap in LINK_REL_RE.captures_iter(link_header) {
         if cap.get(2).is_some_and(|m| m.as_str() == "next") {
             return cap.get(1).map(|m| m.as_str().to_string());
         }
@@ -828,7 +833,7 @@ mod tests {
     #[test]
     fn test_should_create_client_and_normalize_hostname() {
         let http = reqwest::Client::new();
-        let client = Client::new(http, "GitHub.COM", Some("token".to_string()));
+        let client = Client::new(http, "GitHub.COM", Some("token".into()));
         assert_eq!(client.hostname(), "github.com");
         assert_eq!(client.token(), Some("token"));
     }
@@ -869,7 +874,7 @@ mod wiremock_tests {
         Client {
             http,
             hostname: "github.com".to_string(),
-            token: Some("test-token".to_string()),
+            token: Some("test-token".into()),
             api_url_override: None,
         }
     }
@@ -1032,7 +1037,7 @@ mod wiremock_tests {
         let client = Client {
             http,
             hostname: "github.com".to_string(),
-            token: Some("test-token".to_string()),
+            token: Some("test-token".into()),
             api_url_override: None,
         };
 

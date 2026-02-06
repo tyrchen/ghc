@@ -225,10 +225,12 @@ impl Config for FileConfig {
     }
 
     fn write(&self) -> anyhow::Result<()> {
-        let dir = self
-            .config_path
-            .parent()
-            .unwrap_or(std::path::Path::new("."));
+        let dir = self.config_path.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "config path has no parent directory: {}",
+                self.config_path.display()
+            )
+        })?;
         fs::create_dir_all(dir)?;
 
         let config_yaml =
@@ -351,6 +353,7 @@ impl AuthConfig for FileConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::EnvVarGuard;
 
     // --- Empty config ---
 
@@ -631,34 +634,5 @@ mod tests {
             cfg2.get("github.com", "git_protocol"),
             Some("ssh".to_string()),
         );
-    }
-
-    /// RAII guard for environment variables in tests.
-    struct EnvVarGuard {
-        key: String,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &str, value: &str) -> Self {
-            let original = std::env::var(key).ok();
-            // SAFETY: Tests are run single-threaded with --test-threads=1
-            // when env vars are involved, avoiding data races.
-            unsafe { std::env::set_var(key, value) };
-            Self {
-                key: key.to_string(),
-                original,
-            }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                // SAFETY: See EnvVarGuard::set
-                Some(val) => unsafe { std::env::set_var(&self.key, val) },
-                None => unsafe { std::env::remove_var(&self.key) },
-            }
-        }
     }
 }

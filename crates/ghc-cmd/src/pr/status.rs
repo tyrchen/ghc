@@ -11,11 +11,15 @@ use ghc_core::table::TablePrinter;
 use ghc_core::text;
 
 /// GraphQL query for pull request status overview.
+///
+/// Uses `search` API for "created by user" and "review requested" sections,
+/// matching the Go CLI approach. The `pullRequests` connection on Repository
+/// does not accept an `author` argument.
 const PR_STATUS_QUERY: &str = r"
-query PullRequestStatus($owner: String!, $name: String!, $author: String!) {
-  repository(owner: $owner, name: $name) {
-    createdByUser: pullRequests(first: 10, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}, author: $author) {
-      nodes {
+query PullRequestStatus($viewerQuery: String!, $reviewerQuery: String!) {
+  viewerCreated: search(query: $viewerQuery, type: ISSUE, first: 10) {
+    nodes {
+      ... on PullRequest {
         number
         title
         headRefName
@@ -25,21 +29,15 @@ query PullRequestStatus($owner: String!, $name: String!, $author: String!) {
         createdAt
       }
     }
-    reviewRequestedByUser: pullRequests(first: 10, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
-      nodes {
+  }
+  reviewRequested: search(query: $reviewerQuery, type: ISSUE, first: 10) {
+    nodes {
+      ... on PullRequest {
         number
         title
         headRefName
         isDraft
         reviewDecision
-        reviewRequests(first: 10) {
-          nodes {
-            requestedReviewer {
-              ... on User { login }
-              ... on Team { name }
-            }
-          }
-        }
         url
         createdAt
       }
@@ -58,6 +56,14 @@ pub struct StatusArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl StatusArgs {
@@ -80,10 +86,14 @@ impl StatusArgs {
             .await
             .context("failed to get authenticated user")?;
 
+        let full_name = format!("{}/{}", repo.owner(), repo.name());
+        let viewer_query = format!("repo:{full_name} state:open is:pr author:{current_user}");
+        let reviewer_query =
+            format!("repo:{full_name} state:open is:pr review-requested:{current_user}");
+
         let mut variables = HashMap::new();
-        variables.insert("owner".to_string(), Value::String(repo.owner().to_string()));
-        variables.insert("name".to_string(), Value::String(repo.name().to_string()));
-        variables.insert("author".to_string(), Value::String(current_user.clone()));
+        variables.insert("viewerQuery".to_string(), Value::String(viewer_query));
+        variables.insert("reviewerQuery".to_string(), Value::String(reviewer_query));
 
         let data: Value = client
             .graphql(PR_STATUS_QUERY, &variables)
@@ -91,16 +101,21 @@ impl StatusArgs {
             .context("failed to fetch pull request status")?;
 
         // JSON output
-        if !self.json.is_empty() {
-            let json_output =
-                serde_json::to_string_pretty(&data).context("failed to serialize JSON")?;
-            ios_println!(ios, "{json_output}");
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                &data,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
         // Created by you
         let created = data
-            .pointer("/repository/createdByUser/nodes")
+            .pointer("/viewerCreated/nodes")
             .and_then(Value::as_array);
 
         ios_println!(ios, "\n{}", cs.bold("Pull requests created by you"));
@@ -141,35 +156,17 @@ impl StatusArgs {
             }
         }
 
-        // Review requested from you
+        // Review requested from you (already filtered by the search query)
         let review_requested = data
-            .pointer("/repository/reviewRequestedByUser/nodes")
+            .pointer("/reviewRequested/nodes")
             .and_then(Value::as_array);
 
         ios_println!(ios, "\n{}", cs.bold("Pull requests requesting your review"));
         match review_requested {
             Some(prs) if !prs.is_empty() => {
                 let mut tp = TablePrinter::new(ios);
-                let mut found_any = false;
 
                 for pr in prs {
-                    // Filter to only PRs that actually request this user
-                    let requests_this_user = pr
-                        .pointer("/reviewRequests/nodes")
-                        .and_then(Value::as_array)
-                        .is_some_and(|nodes| {
-                            nodes.iter().any(|node| {
-                                node.pointer("/requestedReviewer/login")
-                                    .and_then(Value::as_str)
-                                    .is_some_and(|login| login.eq_ignore_ascii_case(&current_user))
-                            })
-                        });
-
-                    if !requests_this_user {
-                        continue;
-                    }
-                    found_any = true;
-
                     let number = pr.get("number").and_then(Value::as_i64).unwrap_or(0);
                     let title = pr.get("title").and_then(Value::as_str).unwrap_or("");
                     let head_ref = pr.get("headRefName").and_then(Value::as_str).unwrap_or("");
@@ -182,14 +179,10 @@ impl StatusArgs {
                     ]);
                 }
 
-                if found_any {
-                    ios_println!(ios, "{}", tp.render());
-                } else {
-                    ios_println!(ios, "  No pull requests requesting your review");
-                }
+                ios_println!(ios, "{}", tp.render());
             }
             _ => {
-                println!("  No pull requests requesting your review");
+                ios_println!(ios, "  No pull requests requesting your review");
             }
         }
 
@@ -220,42 +213,33 @@ mod tests {
         )
         .await;
 
-        // Mock the PR status query
+        // Mock the PR status query (uses search API)
         mock_graphql(
             &h.server,
             "PullRequestStatus",
             serde_json::json!({
                 "data": {
-                    "repository": {
-                        "createdByUser": {
-                            "nodes": [{
-                                "number": 50,
-                                "title": "My PR",
-                                "headRefName": "my-branch",
-                                "isDraft": false,
-                                "reviewDecision": "APPROVED",
-                                "url": "https://github.com/owner/repo/pull/50",
-                                "createdAt": "2024-01-15T10:00:00Z"
-                            }]
-                        },
-                        "reviewRequestedByUser": {
-                            "nodes": [{
-                                "number": 51,
-                                "title": "Review me",
-                                "headRefName": "review-branch",
-                                "isDraft": false,
-                                "reviewDecision": null,
-                                "reviewRequests": {
-                                    "nodes": [{
-                                        "requestedReviewer": {
-                                            "login": "testuser"
-                                        }
-                                    }]
-                                },
-                                "url": "https://github.com/owner/repo/pull/51",
-                                "createdAt": "2024-01-15T10:00:00Z"
-                            }]
-                        }
+                    "viewerCreated": {
+                        "nodes": [{
+                            "number": 50,
+                            "title": "My PR",
+                            "headRefName": "my-branch",
+                            "isDraft": false,
+                            "reviewDecision": "APPROVED",
+                            "url": "https://github.com/owner/repo/pull/50",
+                            "createdAt": "2024-01-15T10:00:00Z"
+                        }]
+                    },
+                    "reviewRequested": {
+                        "nodes": [{
+                            "number": 51,
+                            "title": "Review me",
+                            "headRefName": "review-branch",
+                            "isDraft": false,
+                            "reviewDecision": null,
+                            "url": "https://github.com/owner/repo/pull/51",
+                            "createdAt": "2024-01-15T10:00:00Z"
+                        }]
                     }
                 }
             }),
@@ -265,6 +249,8 @@ mod tests {
         let args = StatusArgs {
             repo: "owner/repo".into(),
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         args.run(&h.factory).await.unwrap();
@@ -299,10 +285,8 @@ mod tests {
             "PullRequestStatus",
             serde_json::json!({
                 "data": {
-                    "repository": {
-                        "createdByUser": { "nodes": [] },
-                        "reviewRequestedByUser": { "nodes": [] }
-                    }
+                    "viewerCreated": { "nodes": [] },
+                    "reviewRequested": { "nodes": [] }
                 }
             }),
         )
@@ -311,6 +295,8 @@ mod tests {
         let args = StatusArgs {
             repo: "owner/repo".into(),
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         args.run(&h.factory).await.unwrap();
@@ -327,6 +313,8 @@ mod tests {
         let args = StatusArgs {
             repo: "bad".into(),
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         let result = args.run(&h.factory).await;

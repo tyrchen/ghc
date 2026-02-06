@@ -26,6 +26,14 @@ pub struct ListArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl ListArgs {
@@ -64,15 +72,27 @@ impl ListArgs {
             .await
             .context("failed to list variables")?;
 
+        // Extract inner array from wrapper object
+        let items = result
+            .get("variables")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+
         // JSON output
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&result)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                &items,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
-        let variables = result
-            .get("variables")
-            .and_then(Value::as_array)
+        let variables = items
+            .as_array()
             .ok_or_else(|| anyhow::anyhow!("unexpected response format"))?;
 
         if variables.is_empty() {
@@ -131,6 +151,8 @@ mod tests {
             org: None,
             env: None,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 

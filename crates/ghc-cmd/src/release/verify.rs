@@ -26,6 +26,14 @@ pub struct VerifyArgs {
     /// Output JSON.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl VerifyArgs {
@@ -34,6 +42,7 @@ impl VerifyArgs {
     /// # Errors
     ///
     /// Returns an error if the release attestation cannot be verified.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let repo_str = self
             .repo
@@ -125,8 +134,16 @@ impl VerifyArgs {
         }
 
         // JSON output
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&filtered)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let arr = Value::Array(filtered.iter().map(|v| (*v).clone()).collect());
+            let output = ghc_core::json::format_json_output(
+                &arr,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -259,6 +276,8 @@ mod tests {
             tag: Some("v1.0.0".into()),
             repo: Some("owner/repo".into()),
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 

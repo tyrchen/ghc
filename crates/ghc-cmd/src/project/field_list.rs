@@ -23,6 +23,14 @@ pub struct FieldListArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl FieldListArgs {
@@ -31,6 +39,7 @@ impl FieldListArgs {
     /// # Errors
     ///
     /// Returns an error if the fields cannot be listed.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let client = factory.api_client("github.com")?;
 
@@ -118,8 +127,16 @@ impl FieldListArgs {
         let ios = &factory.io;
         let cs = ios.color_scheme();
 
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&fields)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let arr = Value::Array(fields.clone());
+            let output = ghc_core::json::format_json_output(
+                &arr,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 

@@ -17,6 +17,14 @@ pub struct ListArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl ListArgs {
@@ -36,8 +44,16 @@ impl ListArgs {
             .context("failed to list organizations")?;
 
         // JSON output
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&orgs)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let arr = Value::Array(orgs.clone());
+            let output = ghc_core::json::format_json_output(
+                &arr,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -92,6 +108,8 @@ mod tests {
         let args = ListArgs {
             limit: 30,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -116,6 +134,8 @@ mod tests {
         let args = ListArgs {
             limit: 30,
             json: vec!["login".into()],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 

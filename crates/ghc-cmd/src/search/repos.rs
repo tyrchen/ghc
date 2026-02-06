@@ -41,9 +41,69 @@ pub struct ReposArgs {
     #[arg(long, value_parser = ["asc", "desc"], default_value = "desc")]
     order: String,
 
+    /// Filter on repository owner.
+    #[arg(long)]
+    owner: Vec<String>,
+
+    /// Filter based on created at date.
+    #[arg(long)]
+    created: Option<String>,
+
+    /// Filter based on number of followers.
+    #[arg(long)]
+    followers: Option<String>,
+
+    /// Include forks in fetched repositories (false, true, or only).
+    #[arg(long, value_parser = ["false", "true", "only"])]
+    include_forks: Option<String>,
+
+    /// Filter on number of forks.
+    #[arg(long)]
+    forks: Option<String>,
+
+    /// Filter on number of issues with the 'good first issue' label.
+    #[arg(long)]
+    good_first_issues: Option<String>,
+
+    /// Filter on number of issues with the 'help wanted' label.
+    #[arg(long)]
+    help_wanted_issues: Option<String>,
+
+    /// Restrict search to specific field of repository.
+    #[arg(long, value_parser = ["name", "description", "readme"])]
+    r#match: Vec<String>,
+
+    /// Filter based on license type.
+    #[arg(long)]
+    license: Vec<String>,
+
+    /// Filter on last updated at date.
+    #[arg(long)]
+    updated: Option<String>,
+
+    /// Filter on a size range, in kilobytes.
+    #[arg(long)]
+    size: Option<String>,
+
+    /// Filter on number of stars.
+    #[arg(long)]
+    stars: Option<String>,
+
+    /// Filter on number of topics.
+    #[arg(long)]
+    number_topics: Option<String>,
+
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 
     /// Open results in the browser.
     #[arg(short, long)]
@@ -56,6 +116,7 @@ impl ReposArgs {
     /// # Errors
     ///
     /// Returns an error if the search fails.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let mut q = self.query.join(" ");
 
@@ -67,6 +128,45 @@ impl ReposArgs {
         }
         if let Some(ref vis) = self.visibility {
             let _ = write!(q, " is:{vis}");
+        }
+        for owner in &self.owner {
+            let _ = write!(q, " user:{owner}");
+        }
+        if let Some(ref created) = self.created {
+            let _ = write!(q, " created:{created}");
+        }
+        if let Some(ref followers) = self.followers {
+            let _ = write!(q, " followers:{followers}");
+        }
+        if let Some(ref include_forks) = self.include_forks {
+            let _ = write!(q, " fork:{include_forks}");
+        }
+        if let Some(ref forks) = self.forks {
+            let _ = write!(q, " forks:{forks}");
+        }
+        if let Some(ref gfi) = self.good_first_issues {
+            let _ = write!(q, " good-first-issues:{gfi}");
+        }
+        if let Some(ref hwi) = self.help_wanted_issues {
+            let _ = write!(q, " help-wanted-issues:{hwi}");
+        }
+        for m in &self.r#match {
+            let _ = write!(q, " in:{m}");
+        }
+        for lic in &self.license {
+            let _ = write!(q, " license:{lic}");
+        }
+        if let Some(ref updated) = self.updated {
+            let _ = write!(q, " pushed:{updated}");
+        }
+        if let Some(ref size) = self.size {
+            let _ = write!(q, " size:{size}");
+        }
+        if let Some(ref stars) = self.stars {
+            let _ = write!(q, " stars:{stars}");
+        }
+        if let Some(ref nt) = self.number_topics {
+            let _ = write!(q, " topics:{nt}");
         }
 
         if self.web {
@@ -94,8 +194,15 @@ impl ReposArgs {
             .context("failed to search repositories")?;
 
         // JSON output
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&result)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                &result,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -166,7 +273,22 @@ mod tests {
             visibility: None,
             sort: None,
             order: "desc".to_string(),
+            owner: vec![],
+            created: None,
+            followers: None,
+            include_forks: None,
+            forks: None,
+            good_first_issues: None,
+            help_wanted_issues: None,
+            r#match: vec![],
+            license: vec![],
+            updated: None,
+            size: None,
+            stars: None,
+            number_topics: None,
             json: vec![],
+            jq: None,
+            template: None,
             web: false,
         }
     }

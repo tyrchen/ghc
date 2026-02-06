@@ -33,12 +33,16 @@ pub struct SetArgs {
     body: Option<String>,
 
     /// Path to a .env file for batch setting variables.
-    #[arg(long, value_name = "FILE")]
+    #[arg(short = 'f', long, value_name = "FILE")]
     env_file: Option<String>,
 
     /// Visibility for organization variables.
     #[arg(long, value_parser = ["all", "private", "selected"])]
     visibility: Option<String>,
+
+    /// List of repositories that can access an organization variable.
+    #[arg(short, long, value_delimiter = ',')]
+    repos: Vec<String>,
 }
 
 impl SetArgs {
@@ -86,10 +90,24 @@ impl SetArgs {
         });
 
         // Add visibility for org variables
-        if self.org.is_some()
-            && let Some(ref vis) = self.visibility
-        {
-            body["visibility"] = Value::String(vis.clone());
+        if self.org.is_some() {
+            if let Some(ref vis) = self.visibility {
+                body["visibility"] = Value::String(vis.clone());
+            } else if !self.repos.is_empty() {
+                body["visibility"] = Value::String("selected".to_string());
+            }
+        }
+
+        // Resolve repository IDs for --repos
+        if !self.repos.is_empty() && self.org.is_some() {
+            let repo_ids =
+                resolve_repo_ids(&client, self.org.as_deref().unwrap_or(""), &self.repos).await?;
+            body["selected_repository_ids"] = Value::Array(
+                repo_ids
+                    .into_iter()
+                    .map(|id| Value::Number(serde_json::Number::from(id)))
+                    .collect(),
+            );
         }
 
         let (base_path, exists) = if let Some(ref org) = self.org {
@@ -207,4 +225,35 @@ impl SetArgs {
 
         Ok(())
     }
+}
+
+/// Resolve repository names to IDs for org variables with selected visibility.
+async fn resolve_repo_ids(
+    client: &ghc_api::client::Client,
+    default_owner: &str,
+    repo_names: &[String],
+) -> Result<Vec<i64>> {
+    let mut ids = Vec::with_capacity(repo_names.len());
+    for repo_name in repo_names {
+        let full_name = if repo_name.contains('/') {
+            repo_name.clone()
+        } else if !default_owner.is_empty() {
+            format!("{default_owner}/{repo_name}")
+        } else {
+            anyhow::bail!("repository name must be in OWNER/REPO format: {repo_name}");
+        };
+        let repo = Repo::from_full_name(&full_name)
+            .with_context(|| format!("invalid repository name: {full_name}"))?;
+        let path = format!("repos/{}/{}", repo.owner(), repo.name());
+        let data: Value = client
+            .rest(reqwest::Method::GET, &path, None)
+            .await
+            .with_context(|| format!("failed to look up repository: {full_name}"))?;
+        let id = data
+            .get("id")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("failed to get ID for repository: {full_name}"))?;
+        ids.push(id);
+    }
+    Ok(ids)
 }

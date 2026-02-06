@@ -18,6 +18,14 @@ pub struct PortsArgs {
     #[arg(long, value_delimiter = ',', global = true)]
     json: Vec<String>,
 
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
+
     /// Subcommand.
     #[command(subcommand)]
     command: Option<PortsCommand>,
@@ -85,8 +93,15 @@ impl PortsArgs {
             .context("failed to fetch codespace")?;
 
         // JSON output
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&codespace)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                &codespace,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 

@@ -2,6 +2,7 @@
 
 /// Errors originating from core operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum CoreError {
     /// Configuration file read/write error.
     #[error("configuration error: {0}")]
@@ -26,6 +27,7 @@ pub enum CoreError {
 
 /// Configuration-specific errors.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ConfigError {
     /// Failed to read config file.
     #[error("failed to read config file {path}: {source}")]

@@ -31,6 +31,14 @@ pub struct ViewArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl ViewArgs {
@@ -82,11 +90,16 @@ impl ViewArgs {
         let ios = &factory.io;
         let cs = ios.color_scheme();
 
-        // JSON output
-        if !self.json.is_empty() {
-            let json_output =
-                serde_json::to_string_pretty(pr).context("failed to serialize JSON")?;
-            ios_println!(ios, "{json_output}");
+        // JSON output with field filtering, jq, or template
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                pr,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -186,6 +199,103 @@ impl ViewArgs {
 
         ios_println!(ios, "\n{}", text::display_url(url));
 
+        // Show comments if requested
+        if self.comments {
+            self.print_comments(&client, &repo, ios, &cs).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Fetch and print PR comments via REST API.
+    ///
+    /// Fetches both issue comments and review comments, then displays them
+    /// in chronological order. This matches `gh pr view --comments` behavior
+    /// which shows all comment types.
+    async fn print_comments(
+        &self,
+        client: &ghc_api::client::Client,
+        repo: &ghc_core::repo::Repo,
+        ios: &ghc_core::iostreams::IOStreams,
+        cs: &ghc_core::iostreams::ColorScheme,
+    ) -> Result<()> {
+        // Fetch issue comments (general comments on the PR)
+        let issue_path = format!(
+            "repos/{}/{}/issues/{}/comments",
+            repo.owner(),
+            repo.name(),
+            self.number,
+        );
+        let issue_comments: Vec<Value> = client
+            .rest(reqwest::Method::GET, &issue_path, None)
+            .await
+            .context("failed to fetch issue comments")?;
+
+        // Fetch review comments (inline code review comments)
+        let review_path = format!(
+            "repos/{}/{}/pulls/{}/comments",
+            repo.owner(),
+            repo.name(),
+            self.number,
+        );
+        let review_comments: Vec<Value> = client
+            .rest(reqwest::Method::GET, &review_path, None)
+            .await
+            .context("failed to fetch review comments")?;
+
+        // Merge and sort by created_at
+        let mut all_comments: Vec<&Value> = issue_comments
+            .iter()
+            .chain(review_comments.iter())
+            .collect();
+        all_comments.sort_by(|a, b| {
+            let a_date = a.get("created_at").and_then(Value::as_str).unwrap_or("");
+            let b_date = b.get("created_at").and_then(Value::as_str).unwrap_or("");
+            a_date.cmp(b_date)
+        });
+
+        if all_comments.is_empty() {
+            ios_println!(ios, "\n{}", cs.gray("No comments on this pull request."));
+            return Ok(());
+        }
+
+        ios_println!(ios, "\n{}", cs.bold("Comments:"));
+        ios_println!(ios, "{}", "-".repeat(40));
+
+        for comment in &all_comments {
+            let author = comment
+                .pointer("/user/login")
+                .and_then(Value::as_str)
+                .unwrap_or("ghost");
+            let body = comment.get("body").and_then(Value::as_str).unwrap_or("");
+            let created_at = comment
+                .get("created_at")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let diff_hunk = comment.get("diff_hunk").and_then(Value::as_str);
+            let file_path = comment.get("path").and_then(Value::as_str);
+
+            ios_println!(
+                ios,
+                "\n{} commented {}",
+                cs.bold(author),
+                cs.gray(created_at),
+            );
+
+            // Show file context for review comments
+            if let Some(path) = file_path {
+                ios_println!(ios, "{}", cs.gray(&format!("  {path}")));
+            }
+            if let Some(hunk) = diff_hunk {
+                // Show last line of the diff hunk for context
+                if let Some(last_line) = hunk.lines().last() {
+                    ios_println!(ios, "{}", cs.gray(&format!("  {last_line}")));
+                }
+            }
+
+            ios_println!(ios, "{body}");
+        }
+
         Ok(())
     }
 }
@@ -193,7 +303,7 @@ impl ViewArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::{TestHarness, mock_graphql};
+    use crate::test_helpers::{TestHarness, mock_graphql, mock_rest_get};
 
     fn graphql_pr_view_response(pr: &serde_json::Value) -> serde_json::Value {
         serde_json::json!({
@@ -244,6 +354,8 @@ mod tests {
             web: false,
             comments: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         args.run(&h.factory).await.unwrap();
@@ -264,6 +376,8 @@ mod tests {
             web: true,
             comments: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         args.run(&h.factory).await.unwrap();
@@ -288,6 +402,8 @@ mod tests {
             web: false,
             comments: false,
             json: vec!["number".into()],
+            jq: None,
+            template: None,
         };
 
         args.run(&h.factory).await.unwrap();
@@ -295,6 +411,109 @@ mod tests {
         assert!(
             out.contains("\"number\": 42"),
             "should contain JSON number: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_show_comments_when_flag_set() {
+        let h = TestHarness::new().await;
+        mock_graphql(
+            &h.server,
+            "PullRequestView",
+            graphql_pr_view_response(&pr_view_fixture()),
+        )
+        .await;
+        mock_rest_get(
+            &h.server,
+            "/repos/owner/repo/issues/42/comments",
+            serde_json::json!([
+                {
+                    "user": { "login": "reviewer" },
+                    "body": "Looks good to me!",
+                    "created_at": "2024-01-16T10:00:00Z"
+                },
+                {
+                    "user": { "login": "author" },
+                    "body": "Thanks for the review!",
+                    "created_at": "2024-01-16T11:00:00Z"
+                }
+            ]),
+        )
+        .await;
+        mock_rest_get(
+            &h.server,
+            "/repos/owner/repo/pulls/42/comments",
+            serde_json::json!([
+                {
+                    "user": { "login": "code-reviewer" },
+                    "body": "Consider renaming this variable.",
+                    "created_at": "2024-01-16T09:00:00Z",
+                    "path": "src/main.rs",
+                    "diff_hunk": "@@ -10,6 +10,8 @@\n+let foo = bar();"
+                }
+            ]),
+        )
+        .await;
+
+        let args = ViewArgs {
+            number: 42,
+            repo: "owner/repo".into(),
+            web: false,
+            comments: true,
+            json: vec![],
+            jq: None,
+            template: None,
+        };
+
+        args.run(&h.factory).await.unwrap();
+        let out = h.stdout();
+        assert!(
+            out.contains("reviewer"),
+            "should contain comment author: {out}"
+        );
+        assert!(
+            out.contains("Looks good to me!"),
+            "should contain comment body: {out}"
+        );
+        assert!(
+            out.contains("Thanks for the review!"),
+            "should contain second comment: {out}"
+        );
+        assert!(
+            out.contains("code-reviewer"),
+            "should contain review comment author: {out}"
+        );
+        assert!(
+            out.contains("Consider renaming"),
+            "should contain review comment body: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_apply_jq_filter() {
+        let h = TestHarness::new().await;
+        mock_graphql(
+            &h.server,
+            "PullRequestView",
+            graphql_pr_view_response(&pr_view_fixture()),
+        )
+        .await;
+
+        let args = ViewArgs {
+            number: 42,
+            repo: "owner/repo".into(),
+            web: false,
+            comments: false,
+            json: vec![],
+            jq: Some(".title".into()),
+            template: None,
+        };
+
+        args.run(&h.factory).await.unwrap();
+        let out = h.stdout();
+        assert!(
+            out.contains("Add logging"),
+            "should contain jq-filtered title: {out}"
         );
     }
 
@@ -315,6 +534,8 @@ mod tests {
             web: false,
             comments: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         let result = args.run(&h.factory).await;

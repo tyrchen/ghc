@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 /// HTTP API error with status code and message.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ApiError {
     /// HTTP error response.
     #[error("HTTP {status}: {message}")]

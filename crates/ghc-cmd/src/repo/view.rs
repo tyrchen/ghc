@@ -36,6 +36,14 @@ pub struct ViewArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 /// README content fetched from the REST API.
@@ -102,9 +110,16 @@ impl ViewArgs {
 
         let ios = &factory.io;
 
-        // JSON output
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(repo_data)?);
+        // JSON output with field filtering, jq, or template
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                repo_data,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -252,6 +267,8 @@ mod tests {
             web: false,
             branch: None,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -276,6 +293,8 @@ mod tests {
             web: true,
             branch: None,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -293,6 +312,8 @@ mod tests {
             web: true,
             branch: Some("develop".into()),
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -316,6 +337,8 @@ mod tests {
             web: false,
             branch: None,
             json: vec!["name".into()],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -333,6 +356,8 @@ mod tests {
             web: false,
             branch: None,
             json: vec![],
+            jq: None,
+            template: None,
         };
         let result = args.run(&h.factory).await;
         assert!(result.is_err());

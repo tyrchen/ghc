@@ -37,6 +37,14 @@ pub struct CommitsArgs {
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
 
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
+
     /// Open results in the browser.
     #[arg(short, long)]
     web: bool,
@@ -83,8 +91,15 @@ impl CommitsArgs {
             .context("failed to search commits")?;
 
         // JSON output
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&result)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                &result,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -146,6 +161,8 @@ mod tests {
             author: None,
             committer: None,
             json: vec![],
+            jq: None,
+            template: None,
             web: false,
         }
     }

@@ -1,10 +1,33 @@
 //! Issue-related API queries.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
+
+/// Issue state as returned by the GitHub GraphQL API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum IssueState {
+    /// The issue is open.
+    Open,
+    /// The issue is closed.
+    Closed,
+}
+
+impl fmt::Display for IssueState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open => write!(f, "OPEN"),
+            Self::Closed => write!(f, "CLOSED"),
+        }
+    }
+}
 
 /// Issue metadata from the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Issue {
     /// Issue number.
     pub number: i64,
@@ -13,7 +36,7 @@ pub struct Issue {
     /// Body text.
     pub body: Option<String>,
     /// State (OPEN, CLOSED).
-    pub state: String,
+    pub state: IssueState,
     /// Author info.
     pub author: Option<Actor>,
     /// Labels.
@@ -34,6 +57,7 @@ pub struct Issue {
 
 /// Actor (user who performed an action).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Actor {
     /// Login name.
     pub login: String,
@@ -41,6 +65,7 @@ pub struct Actor {
 
 /// Labels connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LabelConnection {
     /// Label nodes.
     pub nodes: Vec<Label>,
@@ -48,6 +73,7 @@ pub struct LabelConnection {
 
 /// A single label.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Label {
     /// Label name.
     pub name: String,
@@ -135,7 +161,7 @@ mod tests {
         let issue: Issue = serde_json::from_str(json).unwrap();
         assert_eq!(issue.number, 42);
         assert_eq!(issue.title, "Bug report");
-        assert_eq!(issue.state, "OPEN");
+        assert_eq!(issue.state, IssueState::Open);
         assert_eq!(issue.author.as_ref().unwrap().login, "user");
     }
 

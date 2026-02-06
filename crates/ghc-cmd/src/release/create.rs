@@ -74,6 +74,14 @@ pub struct CreateArgs {
     #[arg(long, value_name = "CATEGORY")]
     discussion_category: Option<String>,
 
+    /// Fail if there are no commits since the last release.
+    #[arg(long)]
+    fail_on_no_commits: bool,
+
+    /// Tag to use as the starting point for generating release notes.
+    #[arg(long)]
+    notes_start_tag: Option<String>,
+
     /// Files to upload as release assets.
     #[arg(value_name = "FILE")]
     files: Vec<String>,
@@ -85,6 +93,7 @@ impl CreateArgs {
     /// # Errors
     ///
     /// Returns an error if the release cannot be created.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let repo = resolve_repo(self.repo.as_deref())?;
         let client = factory.api_client(repo.host())?;
@@ -127,6 +136,34 @@ impl CreateArgs {
                 _ => String::new(),
             }
         };
+
+        // Check for no commits since last release if requested
+        if self.fail_on_no_commits {
+            let compare_tag = self.notes_start_tag.as_deref().unwrap_or(self.tag.as_str());
+            let compare_path = format!(
+                "repos/{}/{}/compare/{}...{}",
+                repo.owner(),
+                repo.name(),
+                compare_tag,
+                self.target.as_deref().unwrap_or("HEAD"),
+            );
+            if let Ok(compare_data) = client
+                .rest::<Value>(reqwest::Method::GET, &compare_path, None)
+                .await
+            {
+                let total_commits = compare_data
+                    .get("total_commits")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                if total_commits == 0 {
+                    anyhow::bail!(
+                        "no commits found between {} and {}; aborting due to --fail-on-no-commits",
+                        compare_tag,
+                        self.target.as_deref().unwrap_or("HEAD"),
+                    );
+                }
+            }
+        }
 
         let mut body = serde_json::json!({
             "tag_name": self.tag,
@@ -297,6 +334,8 @@ mod tests {
             latest: false,
             verify_tag: false,
             discussion_category: None,
+            fail_on_no_commits: false,
+            notes_start_tag: None,
             files: vec![],
         }
     }

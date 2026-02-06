@@ -52,6 +52,14 @@ pub struct ListArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl ListArgs {
@@ -150,11 +158,17 @@ impl ListArgs {
             })
             .collect();
 
-        // JSON output mode
-        if !self.json.is_empty() {
-            let json_output =
-                serde_json::to_string_pretty(&filtered).context("failed to serialize JSON")?;
-            ios_println!(ios, "{json_output}");
+        // JSON output mode with field filtering, jq, or template
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let arr = Value::Array(filtered.iter().map(|v| (*v).clone()).collect());
+            let output = ghc_core::json::format_json_output(
+                &arr,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -236,6 +250,8 @@ mod tests {
             limit: 30,
             web: false,
             json: vec![],
+            jq: None,
+            template: None,
         }
     }
 

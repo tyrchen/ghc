@@ -30,6 +30,7 @@ regex.workspace = true
 dialoguer.workspace = true
 urlencoding.workspace = true
 crypto_box.workspace = true
+secrecy.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

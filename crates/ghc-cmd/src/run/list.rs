@@ -30,7 +30,7 @@ pub struct ListArgs {
     branch: Option<String>,
 
     /// Filter by actor (user who triggered the run).
-    #[arg(short, long)]
+    #[arg(short = 'u', long = "user")]
     actor: Option<String>,
 
     /// Filter by status.
@@ -45,9 +45,29 @@ pub struct ListArgs {
     #[arg(short, long)]
     event: Option<String>,
 
+    /// Filter runs by the date it was created.
+    #[arg(long)]
+    created: Option<String>,
+
+    /// Filter runs by the SHA of the commit.
+    #[arg(short, long)]
+    commit: Option<String>,
+
+    /// Include disabled workflows.
+    #[arg(short, long)]
+    all: bool,
+
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl ListArgs {
@@ -56,6 +76,7 @@ impl ListArgs {
     /// # Errors
     ///
     /// Returns an error if the runs cannot be listed.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let repo = self
             .repo
@@ -83,21 +104,42 @@ impl ListArgs {
         if let Some(ref event) = self.event {
             let _ = write!(path, "&event={event}");
         }
+        if let Some(ref created) = self.created {
+            let _ = write!(path, "&created={created}");
+        }
+        if let Some(ref commit) = self.commit {
+            let _ = write!(path, "&head_sha={commit}");
+        }
+        if self.all {
+            let _ = write!(path, "&exclude_pull_requests=false");
+        }
 
         let result: Value = client
             .rest(reqwest::Method::GET, &path, None)
             .await
             .context("failed to list runs")?;
 
+        // Extract inner array from wrapper object
+        let items = result
+            .get("workflow_runs")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+
         // JSON output
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&result)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                &items,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
-        let runs = result
-            .get("workflow_runs")
-            .and_then(Value::as_array)
+        let runs = items
+            .as_array()
             .ok_or_else(|| anyhow::anyhow!("unexpected response format"))?;
 
         if runs.is_empty() {
@@ -113,11 +155,16 @@ impl ListArgs {
         for run in runs {
             let id = run.get("id").and_then(Value::as_u64).unwrap_or(0);
             let name = run.get("name").and_then(Value::as_str).unwrap_or("");
+            let display_title = run
+                .get("display_title")
+                .and_then(Value::as_str)
+                .unwrap_or(name);
             let status = run.get("status").and_then(Value::as_str).unwrap_or("");
             let conclusion = run.get("conclusion").and_then(Value::as_str).unwrap_or("");
             let branch = run.get("head_branch").and_then(Value::as_str).unwrap_or("");
             let event = run.get("event").and_then(Value::as_str).unwrap_or("");
             let created_at = run.get("created_at").and_then(Value::as_str).unwrap_or("");
+            let updated_at = run.get("updated_at").and_then(Value::as_str).unwrap_or("");
 
             // Filter by workflow name if specified
             if let Some(ref wf_filter) = self.workflow
@@ -130,18 +177,25 @@ impl ListArgs {
                 (_, "success") => cs.success("completed"),
                 (_, "failure") => cs.error("failed"),
                 (_, "cancelled") => cs.gray("cancelled"),
+                (_, "skipped") => cs.gray("skipped"),
                 ("in_progress", _) => cs.warning("in progress"),
                 ("queued", _) => cs.gray("queued"),
+                ("waiting", _) => cs.gray("waiting"),
                 _ => status.to_string(),
             };
 
+            let elapsed = format_elapsed(created_at, updated_at);
+            let age = format_age(created_at);
+
             tp.add_row(vec![
                 status_display,
-                cs.bold(name),
+                cs.bold(display_title),
+                name.to_string(),
                 branch.to_string(),
                 event.to_string(),
-                format!("{id}"),
-                created_at.to_string(),
+                cs.cyan(&format!("{id}")),
+                elapsed,
+                age,
             ]);
         }
 
@@ -149,6 +203,37 @@ impl ListArgs {
         ios_println!(ios, "{output}");
 
         Ok(())
+    }
+}
+
+/// Format elapsed time between two ISO 8601 timestamps.
+fn format_elapsed(start: &str, end: &str) -> String {
+    let start_dt = chrono::DateTime::parse_from_rfc3339(start).ok();
+    let end_dt = chrono::DateTime::parse_from_rfc3339(end).ok();
+
+    match (start_dt, end_dt) {
+        (Some(s), Some(e)) => {
+            let secs = (e - s).num_seconds().max(0);
+            if secs < 60 {
+                format!("{secs}s")
+            } else if secs < 3600 {
+                format!("{}m{}s", secs / 60, secs % 60)
+            } else {
+                format!("{}h{}m{}s", secs / 3600, (secs % 3600) / 60, secs % 60)
+            }
+        }
+        _ => String::new(),
+    }
+}
+
+/// Format how long ago a timestamp was.
+fn format_age(timestamp: &str) -> String {
+    match chrono::DateTime::parse_from_rfc3339(timestamp) {
+        Ok(dt) => {
+            let duration = chrono::Utc::now().signed_duration_since(dt);
+            ghc_core::text::fuzzy_ago(duration)
+        }
+        Err(_) => timestamp.to_string(),
     }
 }
 
@@ -198,7 +283,12 @@ mod tests {
             actor: None,
             status: None,
             event: None,
+            created: None,
+            commit: None,
+            all: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -223,7 +313,12 @@ mod tests {
             actor: None,
             status: None,
             event: None,
+            created: None,
+            commit: None,
+            all: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
         let result = args.run(&h.factory).await;
         assert!(result.is_err());
@@ -258,11 +353,23 @@ mod tests {
             actor: None,
             status: None,
             event: None,
-            json: vec!["id".to_string()],
+            created: None,
+            commit: None,
+            all: false,
+            json: vec!["id".to_string(), "name".to_string()],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
         let stdout = h.stdout();
-        assert!(stdout.contains("\"workflow_runs\""), "should output JSON");
+        assert!(
+            stdout.contains("\"id\""),
+            "should output JSON with id field: {stdout}",
+        );
+        assert!(
+            stdout.contains("\"name\""),
+            "should output JSON with name field: {stdout}",
+        );
     }
 }

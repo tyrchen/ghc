@@ -29,6 +29,10 @@ pub struct WatchArgs {
     /// Exit with non-zero status if the run fails.
     #[arg(long)]
     exit_status: bool,
+
+    /// Show only relevant/failed steps.
+    #[arg(long)]
+    compact: bool,
 }
 
 impl WatchArgs {
@@ -76,7 +80,7 @@ impl WatchArgs {
                 .rest::<Value>(reqwest::Method::GET, &jobs_path, None)
                 .await
             {
-                display_jobs(ios, &cs, &jobs_data, name, self.run_id);
+                display_jobs(ios, &cs, &jobs_data, name, self.run_id, self.compact);
             }
 
             if status == "completed" {
@@ -124,7 +128,14 @@ impl WatchArgs {
 }
 
 /// Display jobs and their status for a workflow run.
-fn display_jobs(ios: &IOStreams, cs: &ColorScheme, jobs_data: &Value, name: &str, run_id: u64) {
+fn display_jobs(
+    ios: &IOStreams,
+    cs: &ColorScheme,
+    jobs_data: &Value,
+    name: &str,
+    run_id: u64,
+    compact: bool,
+) {
     let jobs = jobs_data
         .get("jobs")
         .and_then(Value::as_array)
@@ -155,17 +166,17 @@ fn display_jobs(ios: &IOStreams, cs: &ColorScheme, jobs_data: &Value, name: &str
 
         ios_eprintln!(ios, "  {status_icon} {job_name}");
 
-        // Show steps for in-progress jobs
-        if job_status == "in_progress"
+        // Show steps for in-progress or failed jobs
+        if (job_status == "in_progress" || job_conclusion == "failure")
             && let Some(steps) = job.get("steps").and_then(Value::as_array)
         {
-            print_steps(ios, cs, steps);
+            print_steps(ios, cs, steps, compact);
         }
     }
 }
 
 /// Print step-level details for an in-progress job.
-fn print_steps(ios: &IOStreams, cs: &ColorScheme, steps: &[Value]) {
+fn print_steps(ios: &IOStreams, cs: &ColorScheme, steps: &[Value], compact: bool) {
     for step in steps {
         let step_name = step
             .get("name")
@@ -173,6 +184,11 @@ fn print_steps(ios: &IOStreams, cs: &ColorScheme, steps: &[Value]) {
             .unwrap_or("unknown");
         let step_status = step.get("status").and_then(Value::as_str).unwrap_or("");
         let step_conclusion = step.get("conclusion").and_then(Value::as_str).unwrap_or("");
+
+        // In compact mode, skip successful/skipped steps
+        if compact && matches!(step_conclusion, "success" | "skipped") {
+            continue;
+        }
 
         let step_icon = match (step_status, step_conclusion) {
             ("completed", "success") => cs.success("v"),

@@ -8,12 +8,14 @@ pub mod create;
 pub mod diff;
 pub mod edit;
 pub mod list;
+pub mod lock;
 pub mod merge;
 pub mod ready;
 pub mod reopen;
 pub mod revert;
 pub mod review;
 pub mod status;
+pub mod unlock;
 pub mod update_branch;
 pub mod view;
 
@@ -42,6 +44,8 @@ pub enum PrCommand {
     Merge(merge::MergeArgs),
     /// Mark a draft pull request as ready for review.
     Ready(ready::ReadyArgs),
+    /// Lock a pull request conversation.
+    Lock(lock::LockArgs),
     /// Reopen a closed pull request.
     Reopen(reopen::ReopenArgs),
     /// Revert a merged pull request.
@@ -50,6 +54,8 @@ pub enum PrCommand {
     Review(review::ReviewArgs),
     /// Show the status of pull requests relevant to you.
     Status(status::StatusArgs),
+    /// Unlock a pull request conversation.
+    Unlock(unlock::UnlockArgs),
     /// Update the branch of a pull request.
     #[command(name = "update-branch")]
     UpdateBranch(update_branch::UpdateBranchArgs),
@@ -73,12 +79,14 @@ impl PrCommand {
             Self::Diff(args) => args.run(factory).await,
             Self::Edit(args) => args.run(factory).await,
             Self::List(args) => args.run(factory).await,
+            Self::Lock(args) => args.run(factory).await,
             Self::Merge(args) => args.run(factory).await,
             Self::Ready(args) => args.run(factory).await,
             Self::Reopen(args) => args.run(factory).await,
             Self::Revert(args) => args.run(factory).await,
             Self::Review(args) => args.run(factory).await,
             Self::Status(args) => args.run(factory).await,
+            Self::Unlock(args) => args.run(factory).await,
             Self::UpdateBranch(args) => args.run(factory).await,
             Self::View(args) => args.run(factory).await,
         }

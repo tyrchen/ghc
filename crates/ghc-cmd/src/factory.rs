@@ -11,6 +11,7 @@ use ghc_core::config::{Config, FileConfig};
 use ghc_core::iostreams::{IOStreams, TestOutput};
 use ghc_core::prompter::{DialoguerPrompter, Prompter, StubPrompter};
 use ghc_git::client::GitClient;
+use secrecy::SecretString;
 
 /// Shared factory providing lazily-initialized dependencies to all commands.
 ///
@@ -29,7 +30,7 @@ pub struct Factory {
     // Test overrides
     http_override: Option<reqwest::Client>,
     api_url_override: Option<String>,
-    token_override: Option<String>,
+    token_override: Option<SecretString>,
     browser_stub: Option<Arc<StubBrowser>>,
     prompter_stub: Option<Arc<StubPrompter>>,
 }
@@ -107,7 +108,7 @@ impl Factory {
     /// Set a test auth token.
     #[must_use]
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
-        self.token_override = Some(token.into());
+        self.token_override = Some(SecretString::from(token.into()));
         self
     }
 
@@ -222,10 +223,12 @@ impl Factory {
             ghc_api::http::build_client(&opts)?
         };
 
-        let token = self.token_override.clone().or_else(|| {
+        let token: Option<SecretString> = self.token_override.clone().or_else(|| {
             self.config().ok().and_then(|c| {
                 let cfg = c.lock().ok()?;
-                cfg.authentication().active_token(hostname).map(|(t, _)| t)
+                cfg.authentication()
+                    .active_token(hostname)
+                    .map(|(t, _)| SecretString::from(t))
             })
         });
 

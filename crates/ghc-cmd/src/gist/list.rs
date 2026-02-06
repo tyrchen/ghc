@@ -26,6 +26,18 @@ pub struct ListArgs {
     /// Filter gists by regex matching description or filenames.
     #[arg(long, value_name = "PATTERN")]
     filter: Option<String>,
+
+    /// Output JSON with specified fields.
+    #[arg(long, value_delimiter = ',')]
+    json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl ListArgs {
@@ -48,6 +60,20 @@ impl ListArgs {
             if ios.is_stdout_tty() {
                 ios_eprintln!(ios, "No gists found");
             }
+            return Ok(());
+        }
+
+        // JSON output
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let items = Value::Array(gists.clone());
+            let output = ghc_core::json::format_json_output(
+                &items,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -177,6 +203,9 @@ mod tests {
             visibility: None,
             include_content: false,
             filter: None,
+            json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -216,6 +245,9 @@ mod tests {
             visibility: Some("public".into()),
             include_content: false,
             filter: None,
+            json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -254,6 +286,9 @@ mod tests {
             visibility: None,
             include_content: false,
             filter: Some("(?i)rust".into()),
+            json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 

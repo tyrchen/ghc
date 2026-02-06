@@ -13,7 +13,6 @@ mod exit_codes {
     pub const ERROR: i32 = 1;
     pub const CANCEL: i32 = 2;
     pub const AUTH: i32 = 4;
-    #[allow(dead_code)]
     pub const PENDING: i32 = 8;
 }
 
@@ -108,7 +107,7 @@ enum Commands {
     Run(ghc_cmd::run::RunCommand),
     /// Search across GitHub.
     #[command(subcommand)]
-    Search(ghc_cmd::search::SearchCommand),
+    Search(Box<ghc_cmd::search::SearchCommand>),
     /// Manage repository secrets.
     #[command(subcommand)]
     Secret(ghc_cmd::secret::SecretCommand),
@@ -151,8 +150,13 @@ async fn main() {
                     exit_codes::CANCEL
                 } else if e.downcast_ref::<ghc_core::cmdutil::AuthError>().is_some() {
                     exit_codes::AUTH
+                } else if e
+                    .downcast_ref::<ghc_core::cmdutil::PendingError>()
+                    .is_some()
+                {
+                    exit_codes::PENDING
                 } else {
-                    eprintln!("Error: {e:#}");
+                    tracing::error!("{e:#}");
                     exit_codes::ERROR
                 }
             }

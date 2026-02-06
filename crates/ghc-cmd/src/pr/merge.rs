@@ -31,13 +31,24 @@ pub struct MergeArgs {
     #[arg(short = 'R', long)]
     repo: String,
 
-    /// Merge method to use. If not specified and the terminal is interactive,
-    /// you will be prompted to choose. Otherwise defaults to merge.
-    #[arg(short, long, value_enum)]
+    /// Merge method to use (alternative to --merge/--squash/--rebase).
+    #[arg(long, value_enum, conflicts_with_all = ["merge_flag", "squash", "rebase"])]
     method: Option<MergeMethod>,
 
+    /// Merge via a merge commit.
+    #[arg(short = 'm', long = "merge", conflicts_with_all = ["squash", "rebase"])]
+    merge_flag: bool,
+
+    /// Squash commits into a single commit before merging.
+    #[arg(short = 's', long, conflicts_with_all = ["merge_flag", "rebase"])]
+    squash: bool,
+
+    /// Rebase commits before merging.
+    #[arg(short = 'r', long, conflicts_with_all = ["merge_flag", "squash"])]
+    rebase: bool,
+
     /// Commit title for the merge commit.
-    #[arg(short, long)]
+    #[arg(short = 't', long)]
     subject: Option<String>,
 
     /// Commit message body for the merge commit.
@@ -74,6 +85,20 @@ pub struct MergeArgs {
 }
 
 impl MergeArgs {
+    /// Resolve the merge method from boolean flags or --method.
+    /// Returns `None` if no explicit method was specified.
+    fn explicit_merge_method(&self) -> Option<MergeMethod> {
+        if self.merge_flag {
+            Some(MergeMethod::Merge)
+        } else if self.squash {
+            Some(MergeMethod::Squash)
+        } else if self.rebase {
+            Some(MergeMethod::Rebase)
+        } else {
+            self.method.clone()
+        }
+    }
+
     /// Run the pr merge command.
     ///
     /// # Errors
@@ -96,9 +121,9 @@ impl MergeArgs {
             return self.handle_admin_merge(&client, &repo, ios).await;
         }
 
-        // Resolve merge method: use explicit flag, prompt interactively, or default
-        let resolved_method = if let Some(m) = &self.method {
-            m.clone()
+        // Resolve merge method: boolean flags, --method, prompt, or default
+        let resolved_method = if let Some(m) = self.explicit_merge_method() {
+            m
         } else if ios.can_prompt() {
             let options = vec![
                 "Create a merge commit".to_string(),
@@ -227,10 +252,10 @@ impl MergeArgs {
             .and_then(|id| id.as_str())
             .ok_or_else(|| anyhow::anyhow!("pull request #{} not found", self.number))?;
 
-        let merge_method = match self.method {
-            Some(MergeMethod::Merge) | None => "MERGE",
+        let merge_method = match self.explicit_merge_method() {
             Some(MergeMethod::Squash) => "SQUASH",
             Some(MergeMethod::Rebase) => "REBASE",
+            Some(MergeMethod::Merge) | None => "MERGE",
         };
 
         let mut mutation_vars = std::collections::HashMap::new();
@@ -460,6 +485,9 @@ mod tests {
             number,
             repo: repo.into(),
             method: Some(MergeMethod::Merge),
+            merge_flag: false,
+            squash: false,
+            rebase: false,
             subject: None,
             body: None,
             body_file: None,

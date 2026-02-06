@@ -77,6 +77,14 @@ pub struct ChecksArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl ChecksArgs {
@@ -154,10 +162,16 @@ impl ChecksArgs {
         }
 
         // JSON output
-        if !self.json.is_empty() {
-            let json_output =
-                serde_json::to_string_pretty(contexts).context("failed to serialize JSON")?;
-            ios_println!(ios, "{json_output}");
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let contexts_val = Value::Array(contexts.clone());
+            let output = ghc_core::json::format_json_output(
+                &contexts_val,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             let all_complete = rollup_state != "PENDING";
             let has_failures = rollup_state == "FAILURE" || rollup_state == "ERROR";
             return Ok((all_complete, has_failures));
@@ -306,6 +320,8 @@ mod tests {
             fail_fast: false,
             required: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         args.run(&h.factory).await.unwrap();
@@ -334,6 +350,8 @@ mod tests {
             fail_fast: false,
             required: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         args.run(&h.factory).await.unwrap();
@@ -372,6 +390,8 @@ mod tests {
             fail_fast: true,
             required: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         let result = args.run(&h.factory).await;
@@ -390,6 +410,8 @@ mod tests {
             fail_fast: false,
             required: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         let result = args.run(&h.factory).await;

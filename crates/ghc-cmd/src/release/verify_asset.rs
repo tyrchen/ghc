@@ -31,6 +31,14 @@ pub struct VerifyAssetArgs {
     /// Output JSON.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl VerifyAssetArgs {
@@ -80,8 +88,16 @@ impl VerifyAssetArgs {
             ));
         }
 
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&matching)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let arr = Value::Array(matching.iter().map(|v| (*v).clone()).collect());
+            let output = ghc_core::json::format_json_output(
+                &arr,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -248,6 +264,8 @@ mod tests {
             file: "my-binary.tar.gz".into(),
             repo: Some("owner/repo".into()),
             json: vec![],
+            jq: None,
+            template: None,
         };
         assert_eq!(args.tag.as_deref(), Some("v1.0.0"));
         assert_eq!(args.file, "my-binary.tar.gz");

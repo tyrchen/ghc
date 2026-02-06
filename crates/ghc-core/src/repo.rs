@@ -10,6 +10,7 @@ use crate::instance::{self, GITHUB_COM};
 
 /// A GitHub repository identified by owner, name, and host.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Repo {
     owner: String,
     name: String,

@@ -210,6 +210,7 @@ pub static CONFIG_OPTIONS: &[ConfigOption] = &[
 
 /// A known configuration option.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ConfigOption {
     /// Config key name.
     pub key: &'static str,
@@ -242,6 +243,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::test_utils::EnvVarGuard;
 
     #[rstest]
     #[case("git_protocol", "https")]
@@ -293,34 +295,5 @@ mod tests {
         let _guard = EnvVarGuard::set("GH_DATA_DIR", "/tmp/test-gh-data");
         let dir = data_dir();
         assert_eq!(dir, std::path::PathBuf::from("/tmp/test-gh-data"));
-    }
-
-    /// RAII guard for environment variables in tests.
-    struct EnvVarGuard {
-        key: String,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &str, value: &str) -> Self {
-            let original = std::env::var(key).ok();
-            // SAFETY: Tests are run single-threaded with --test-threads=1
-            // when env vars are involved, avoiding data races.
-            unsafe { std::env::set_var(key, value) };
-            Self {
-                key: key.to_string(),
-                original,
-            }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                // SAFETY: See EnvVarGuard::set
-                Some(val) => unsafe { std::env::set_var(&self.key, val) },
-                None => unsafe { std::env::remove_var(&self.key) },
-            }
-        }
     }
 }

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -1276,10 +1277,13 @@ async fn interactive_license(
     Ok(key)
 }
 
+/// Regex for characters not allowed in repository names.
+static REPO_NAME_INVALID_CHARS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[^\w._-]+").expect("REPO_NAME_INVALID_CHARS is a valid regex"));
+
 /// Normalize a repository name (replace invalid characters with hyphens).
 fn normalize_repo_name(name: &str) -> String {
-    let re = Regex::new(r"[^\w._-]+").unwrap_or_else(|_| Regex::new(".").expect("valid regex"));
-    let result = re.replace_all(name, "-");
+    let result = REPO_NAME_INVALID_CHARS.replace_all(name, "-");
     result.trim_end_matches(".git").to_string()
 }
 

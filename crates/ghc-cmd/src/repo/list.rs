@@ -59,6 +59,14 @@ pub struct ListArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 /// Result of listing repositories, including total count and ownership info.
@@ -143,10 +151,17 @@ impl ListArgs {
             );
         }
 
-        // JSON output mode
-        if !self.json.is_empty() {
-            let json_output = serde_json::to_string_pretty(&result.repos)?;
-            ios_println!(ios, "{json_output}");
+        // JSON output mode with field filtering, jq, or template
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let arr = Value::Array(result.repos.clone());
+            let output = ghc_core::json::format_json_output(
+                &arr,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -634,6 +649,8 @@ mod tests {
             archived: false,
             no_archived: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -663,6 +680,8 @@ mod tests {
             archived: false,
             no_archived: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -687,6 +706,8 @@ mod tests {
             archived: false,
             no_archived: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -731,6 +752,8 @@ mod tests {
             archived: false,
             no_archived: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -753,6 +776,8 @@ mod tests {
             archived: false,
             no_archived: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
         let result = args.run(&h.factory).await;
         assert!(result.is_err());
@@ -774,6 +799,8 @@ mod tests {
             archived: true,
             no_archived: true,
             json: vec![],
+            jq: None,
+            template: None,
         };
         let result = args.run(&h.factory).await;
         assert!(result.is_err());
@@ -793,6 +820,8 @@ mod tests {
             archived: false,
             no_archived: true,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         let query = args.build_search_query("myuser");
@@ -817,6 +846,8 @@ mod tests {
             archived: false,
             no_archived: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         let query = args.build_search_query("org");
@@ -836,6 +867,8 @@ mod tests {
             archived: false,
             no_archived: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         let header = args.list_header("testuser", 5, 42);
@@ -855,6 +888,8 @@ mod tests {
             archived: false,
             no_archived: false,
             json: vec![],
+            jq: None,
+            template: None,
         };
 
         let header = args.list_header("testuser", 3, 100);

@@ -8,7 +8,11 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use ghc_api::client::Client;
-use ghc_api::queries::{issue::Issue, pr::PullRequest, repo::Repository};
+use ghc_api::queries::{
+    issue::{Issue, IssueState},
+    pr::PullRequest,
+    repo::Repository,
+};
 
 /// Load a JSON fixture file from the fixtures directory.
 fn load_fixture(name: &str) -> Value {
@@ -20,7 +24,7 @@ fn load_fixture(name: &str) -> Value {
 
 fn create_client(_server: &MockServer) -> Client {
     let http = reqwest::Client::new();
-    Client::new(http, "github.com", Some("test-token".to_string()))
+    Client::new(http, "github.com", Some("test-token".into()))
 }
 
 #[tokio::test]
@@ -72,7 +76,7 @@ async fn test_should_deserialize_issue_list_from_fixture() {
     assert_eq!(issues.len(), 2);
     assert_eq!(issues[0].number, 100);
     assert_eq!(issues[0].title, "Bug: CLI crashes on large repos");
-    assert_eq!(issues[0].state, "OPEN");
+    assert_eq!(issues[0].state, IssueState::Open);
     assert_eq!(issues[0].author.as_ref().unwrap().login, "testuser");
     assert_eq!(issues[0].labels.as_ref().unwrap().nodes[0].name, "bug");
 

@@ -44,7 +44,7 @@ tokio = { version = "1.49", features = [
 clap = { version = "4.5", features = ["derive", "env", "string"] }
 
 # HTTP
-reqwest = { version = "0.13", features = ["json", "gzip", "stream", "form"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "gzip", "stream", "form", "rustls"] }
 
 # Logging
 tracing = "0.1"
@@ -76,6 +76,10 @@ base64 = "0.22"
 sha2 = "0.10"
 hex = "0.4"
 crypto_box = { version = "0.9", features = ["seal"] }
+jaq-interpret = "1.5"
+jaq-parse = "1.0"
+jaq-core = "1.5"
+jaq-std = "1.6"
 flate2 = "1.1"
 tar = "0.4"
 zip = { version = "7.4", default-features = false, features = ["deflate"] }

@@ -23,6 +23,14 @@ pub struct StatusArgs {
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl StatusArgs {
@@ -99,10 +107,15 @@ impl StatusArgs {
             .context("failed to fetch issue status")?;
 
         // JSON output
-        if !self.json.is_empty() {
-            let json_output =
-                serde_json::to_string_pretty(&data).context("failed to serialize JSON")?;
-            ios_println!(ios, "{json_output}");
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                &data,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -245,6 +258,8 @@ mod tests {
         let args = StatusArgs {
             repo: "owner/repo".to_string(),
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -268,7 +283,9 @@ mod tests {
 
         let args = StatusArgs {
             repo: "owner/repo".to_string(),
-            json: vec!["all".to_string()],
+            json: vec!["assigned".to_string()],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 

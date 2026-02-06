@@ -77,9 +77,17 @@ pub struct CreateArgs {
     #[arg(short = 'T', long)]
     template: Option<String>,
 
+    /// Add the pull request to projects by title.
+    #[arg(short, long)]
+    project: Vec<String>,
+
     /// Disable maintainer's ability to modify pull request.
     #[arg(long)]
     no_maintainer_edit: bool,
+
+    /// Recover input from a failed run of create.
+    #[arg(long)]
+    recover: Option<String>,
 
     /// Print details instead of creating the PR.
     #[arg(long)]
@@ -398,7 +406,9 @@ mod tests {
             reviewer: vec![],
             milestone: None,
             template: None,
+            project: vec![],
             no_maintainer_edit: false,
+            recover: None,
             dry_run: false,
             web: false,
         }

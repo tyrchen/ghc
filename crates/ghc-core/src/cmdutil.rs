@@ -86,6 +86,7 @@ pub fn check_auth<C: crate::config::Config + ?Sized>(config: &C) -> bool {
 mod tests {
     use super::*;
     use crate::config::{Config, FileConfig};
+    use crate::test_utils::EnvVarGuard;
 
     #[test]
     fn test_should_display_cancel_error() {
@@ -137,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_should_determine_editor_from_config() {
-        let _guards = [EnvGuard::unset("GH_EDITOR")];
+        let _guards = [EnvVarGuard::unset("GH_EDITOR")];
         let mut cfg = FileConfig::empty();
         cfg.set("", "editor", "code").unwrap();
         let editor = determine_editor(&cfg, "");
@@ -147,9 +148,9 @@ mod tests {
     #[test]
     fn test_should_fallback_to_nano() {
         let _guards = [
-            EnvGuard::unset("GH_EDITOR"),
-            EnvGuard::unset("VISUAL"),
-            EnvGuard::unset("EDITOR"),
+            EnvVarGuard::unset("GH_EDITOR"),
+            EnvVarGuard::unset("VISUAL"),
+            EnvVarGuard::unset("EDITOR"),
         ];
         let cfg = FileConfig::empty();
         let editor = determine_editor(&cfg, "");
@@ -158,44 +159,22 @@ mod tests {
 
     #[test]
     fn test_should_check_auth_returns_false_for_empty() {
-        let _guards = [EnvGuard::unset("GH_TOKEN"), EnvGuard::unset("GITHUB_TOKEN")];
+        let _guards = [
+            EnvVarGuard::unset("GH_TOKEN"),
+            EnvVarGuard::unset("GITHUB_TOKEN"),
+        ];
         let cfg = FileConfig::empty();
         assert!(!check_auth(&cfg));
     }
 
     #[test]
     fn test_should_check_auth_returns_true_with_hosts() {
-        let _guards = [EnvGuard::unset("GH_TOKEN"), EnvGuard::unset("GITHUB_TOKEN")];
+        let _guards = [
+            EnvVarGuard::unset("GH_TOKEN"),
+            EnvVarGuard::unset("GITHUB_TOKEN"),
+        ];
         let mut cfg = FileConfig::empty();
         cfg.set("github.com", "oauth_token", "token").unwrap();
         assert!(check_auth(&cfg));
-    }
-
-    struct EnvGuard {
-        key: String,
-        original: Option<String>,
-    }
-
-    impl EnvGuard {
-        fn unset(key: &str) -> Self {
-            let original = std::env::var(key).ok();
-            // SAFETY: Tests are run single-threaded with --test-threads=1
-            // when env vars are involved, avoiding data races.
-            unsafe { std::env::remove_var(key) };
-            Self {
-                key: key.to_string(),
-                original,
-            }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                // SAFETY: See EnvGuard::unset
-                Some(val) => unsafe { std::env::set_var(&self.key, val) },
-                None => unsafe { std::env::remove_var(&self.key) },
-            }
-        }
     }
 }

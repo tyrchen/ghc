@@ -12,6 +12,7 @@ pub mod pin;
 pub mod reopen;
 pub mod status;
 pub mod transfer;
+pub mod unlock;
 pub mod unpin;
 pub mod view;
 
@@ -44,6 +45,8 @@ pub enum IssueCommand {
     Status(status::StatusArgs),
     /// Transfer an issue to another repository.
     Transfer(transfer::TransferArgs),
+    /// Unlock an issue to allow conversation.
+    Unlock(unlock::UnlockArgs),
     /// Unpin an issue.
     Unpin(unpin::UnpinArgs),
     /// View an issue.
@@ -70,6 +73,7 @@ impl IssueCommand {
             Self::Reopen(args) => args.run(factory).await,
             Self::Status(args) => args.run(factory).await,
             Self::Transfer(args) => args.run(factory).await,
+            Self::Unlock(args) => args.run(factory).await,
             Self::Unpin(args) => args.run(factory).await,
             Self::View(args) => args.run(factory).await,
         }

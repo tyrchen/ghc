@@ -1,12 +1,38 @@
 //! Pull request-related API queries.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use super::issue::{Actor, CommentCount, LabelConnection};
 
+/// Pull request state as returned by the GitHub GraphQL API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum PrState {
+    /// The pull request is open.
+    Open,
+    /// The pull request was closed without merging.
+    Closed,
+    /// The pull request was merged.
+    Merged,
+}
+
+impl fmt::Display for PrState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open => write!(f, "OPEN"),
+            Self::Closed => write!(f, "CLOSED"),
+            Self::Merged => write!(f, "MERGED"),
+        }
+    }
+}
+
 /// Pull request metadata from the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct PullRequest {
     /// PR number.
     pub number: i64,
@@ -15,7 +41,7 @@ pub struct PullRequest {
     /// Body text.
     pub body: Option<String>,
     /// State (OPEN, CLOSED, MERGED).
-    pub state: String,
+    pub state: PrState,
     /// Whether it's a draft.
     pub is_draft: bool,
     /// Author.
@@ -131,7 +157,7 @@ mod tests {
         let pr: PullRequest = serde_json::from_str(json).unwrap();
         assert_eq!(pr.number, 123);
         assert_eq!(pr.title, "Add feature");
-        assert_eq!(pr.state, "OPEN");
+        assert_eq!(pr.state, PrState::Open);
         assert!(!pr.is_draft);
         assert_eq!(pr.head_ref_name, "feature-branch");
         assert_eq!(pr.base_ref_name, "main");
@@ -156,7 +182,7 @@ mod tests {
             "mergeable": "MERGEABLE"
         }"#;
         let pr: PullRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(pr.state, "MERGED");
+        assert_eq!(pr.state, PrState::Merged);
         assert_eq!(pr.merged_at, Some("2024-01-02T00:00:00Z".to_string()));
         assert_eq!(pr.additions, Some(10));
         assert_eq!(pr.deletions, Some(5));

@@ -2,6 +2,7 @@
 //!
 //! Maps from Go's `internal/text` package.
 
+use base64::Engine;
 use chrono::{DateTime, Utc};
 
 /// Truncate a string to a maximum display width, appending "..." if truncated.
@@ -145,37 +146,10 @@ pub fn percent_encode(s: &str) -> String {
 /// assert_eq!(base64_decode("d29ybGQ=").unwrap(), b"world");
 /// ```
 pub fn base64_decode(input: &str) -> std::result::Result<Vec<u8>, String> {
-    let filtered: Vec<u8> = input
-        .bytes()
-        .filter(|b| !matches!(b, b' ' | b'\n' | b'\r' | b'\t'))
-        .collect();
-
-    let mut output = Vec::with_capacity(filtered.len() * 3 / 4);
-    let mut buf: u32 = 0;
-    let mut bits_collected: u32 = 0;
-
-    for &byte in &filtered {
-        if byte == b'=' {
-            break;
-        }
-        let val = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return Err(format!("invalid base64 character: {}", byte as char)),
-        };
-        buf = (buf << 6) | u32::from(val);
-        bits_collected += 6;
-        if bits_collected >= 8 {
-            bits_collected -= 8;
-            output.push(u8::try_from((buf >> bits_collected) & 0xFF).unwrap_or(0));
-            buf &= (1 << bits_collected) - 1;
-        }
-    }
-
-    Ok(output)
+    let filtered: String = input.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(filtered)
+        .map_err(|e| format!("invalid base64: {e}"))
 }
 
 /// Encode bytes into a standard base64 string (RFC 4648 with padding).
@@ -188,42 +162,7 @@ pub fn base64_decode(input: &str) -> std::result::Result<Vec<u8>, String> {
 /// assert_eq!(base64_encode(b"world"), "d29ybGQ=");
 /// ```
 pub fn base64_encode(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
-    let chunks = input.chunks(3);
-
-    for chunk in chunks {
-        let b0 = u32::from(chunk[0]);
-        let b1 = if chunk.len() > 1 {
-            u32::from(chunk[1])
-        } else {
-            0
-        };
-        let b2 = if chunk.len() > 2 {
-            u32::from(chunk[2])
-        } else {
-            0
-        };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-
-        output.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
-        output.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
-
-        if chunk.len() > 1 {
-            output.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
-        } else {
-            output.push('=');
-        }
-
-        if chunk.len() > 2 {
-            output.push(ALPHABET[(triple & 0x3F) as usize] as char);
-        } else {
-            output.push('=');
-        }
-    }
-
-    output
+    base64::engine::general_purpose::STANDARD.encode(input)
 }
 
 /// Simple title case: capitalize the first letter of each word.

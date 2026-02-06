@@ -11,13 +11,17 @@ pub mod browser;
 pub mod cmdutil;
 pub mod config;
 pub mod errors;
+pub mod export;
 pub mod instance;
 pub mod iostreams;
+pub mod json;
 pub mod keyring_store;
 pub mod markdown;
 pub mod prompter;
 pub mod repo;
 pub mod table;
+#[cfg(test)]
+pub mod test_utils;
 pub mod text;
 
 pub use errors::CoreError;

@@ -37,6 +37,14 @@ pub struct ListArgs {
     /// Output JSON with specified fields (e.g., "tagName,name,isDraft,isPrerelease").
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl ListArgs {
@@ -45,6 +53,7 @@ impl ListArgs {
     /// # Errors
     ///
     /// Returns an error if the releases cannot be listed.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let repo = self
             .repo
@@ -74,7 +83,7 @@ impl ListArgs {
         }
 
         // JSON output mode
-        if !self.json.is_empty() {
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
             let filtered: Vec<Value> = releases
                 .iter()
                 .filter(|r| {
@@ -93,7 +102,15 @@ impl ListArgs {
                 })
                 .cloned()
                 .collect();
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&filtered)?);
+            let arr = Value::Array(filtered);
+            let output = ghc_core::json::format_json_output(
+                &arr,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
@@ -194,6 +211,8 @@ mod tests {
             exclude_pre_releases: false,
             order: "desc".into(),
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -235,6 +254,8 @@ mod tests {
             exclude_pre_releases: true,
             order: "desc".into(),
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -275,6 +296,8 @@ mod tests {
             exclude_pre_releases: false,
             order: "desc".into(),
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -299,6 +322,8 @@ mod tests {
             exclude_pre_releases: false,
             order: "desc".into(),
             json: vec![],
+            jq: None,
+            template: None,
         };
         let result = args.run(&h.factory).await;
         assert!(result.is_err());
@@ -335,12 +360,14 @@ mod tests {
             exclude_drafts: false,
             exclude_pre_releases: false,
             order: "desc".into(),
-            json: vec!["tagName".into()],
+            json: vec!["tag_name".into()],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
         let out = h.stdout();
-        // JSON output should contain the raw release data
+        // JSON output should contain the filtered release data
         assert!(out.contains("\"tag_name\""));
         assert!(out.contains("v1.0.0"));
         assert!(out.contains("v0.9.0"));
@@ -377,7 +404,9 @@ mod tests {
             exclude_drafts: true,
             exclude_pre_releases: false,
             order: "desc".into(),
-            json: vec!["tagName".into()],
+            json: vec!["tag_name".into()],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 

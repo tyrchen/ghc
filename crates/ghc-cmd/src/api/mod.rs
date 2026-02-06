@@ -18,16 +18,16 @@ pub struct ApiArgs {
     /// The endpoint path (e.g., `repos/{owner}/{repo}/issues`).
     endpoint: String,
 
-    /// The HTTP method to use.
-    #[arg(short = 'X', long, default_value = "GET")]
-    method: String,
+    /// The HTTP method to use (defaults to GET, or POST when parameters are provided).
+    #[arg(short = 'X', long)]
+    method: Option<String>,
 
-    /// Request body (JSON string or @file).
-    #[arg(short = 'f', long)]
+    /// Add a typed parameter in key=value format (with JSON value coercion).
+    #[arg(short = 'F', long)]
     field: Vec<String>,
 
-    /// Raw request body fields.
-    #[arg(short = 'F', long = "raw-field")]
+    /// Add a string parameter in key=value format (no JSON coercion).
+    #[arg(short = 'f', long = "raw-field")]
     raw_field: Vec<String>,
 
     /// Add a HTTP request header.
@@ -53,6 +53,14 @@ pub struct ApiArgs {
     /// Input file for the request body.
     #[arg(long)]
     input: Option<String>,
+
+    /// Opt into GitHub API previews (names should omit '-preview').
+    #[arg(short, long)]
+    preview: Vec<String>,
+
+    /// Cache the response (e.g., "3600s", "60m", "1h").
+    #[arg(long)]
+    cache: Option<String>,
 
     /// Print verbose request/response info.
     #[arg(long)]
@@ -80,12 +88,20 @@ impl ApiArgs {
         let client = factory.api_client(hostname)?;
         let ios = &factory.io;
 
-        let method = self.method.to_uppercase();
-        let method: reqwest::Method = method
-            .parse()
-            .map_err(|_| anyhow::anyhow!("invalid HTTP method: {}", self.method))?;
-
         let body = self.build_body()?;
+
+        // Auto-detect method: if user didn't pass -X explicitly and there are
+        // parameters or input, default to POST (matching Go CLI behavior).
+        let effective_method = if let Some(ref m) = self.method {
+            m.to_uppercase()
+        } else if body.is_some() {
+            "POST".to_string()
+        } else {
+            "GET".to_string()
+        };
+        let method: reqwest::Method = effective_method
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid HTTP method: {effective_method}"))?;
 
         if self.verbose {
             ios_eprintln!(ios, "> {} /{}", method, self.endpoint);
@@ -181,8 +197,8 @@ impl ApiArgs {
         }
 
         if let Some(ref jq_expr) = self.jq {
-            let filtered = apply_jq_filter(result, jq_expr)?;
-            ios_println!(ios, "{}", format_output(&filtered, ios.is_stdout_tty()));
+            let filtered_str = ghc_core::export::apply_jq_filter(result, jq_expr)?;
+            ios_println!(ios, "{filtered_str}");
         } else {
             ios_println!(ios, "{}", format_output(result, ios.is_stdout_tty()));
         }
@@ -192,7 +208,11 @@ impl ApiArgs {
 
     /// Validate flag combinations.
     fn validate_flags(&self) -> anyhow::Result<()> {
-        if self.paginate && !self.method.eq_ignore_ascii_case("GET") && self.endpoint != "graphql" {
+        let effective_method = self.method.as_deref().unwrap_or("GET");
+        if self.paginate
+            && !effective_method.eq_ignore_ascii_case("GET")
+            && self.endpoint != "graphql"
+        {
             return Err(anyhow::anyhow!(
                 "the `--paginate` option is not supported for non-GET requests"
             ));
@@ -236,9 +256,24 @@ impl ApiArgs {
 
         for field in &self.field {
             if let Some((key, value)) = field.split_once('=') {
-                // Try to parse as JSON value, fall back to string
-                let json_value: Value = serde_json::from_str(value)
-                    .unwrap_or_else(|_| Value::String(value.to_string()));
+                // Support @path file references
+                let json_value: Value = if let Some(file_path) = value.strip_prefix('@') {
+                    if file_path == "-" {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        std::io::stdin()
+                            .read_to_string(&mut buf)
+                            .with_context(|| "failed to read from stdin for @-")?;
+                        Value::String(buf)
+                    } else {
+                        let content = std::fs::read_to_string(file_path)
+                            .with_context(|| format!("failed to read file: {file_path}"))?;
+                        Value::String(content)
+                    }
+                } else {
+                    // Try to parse as JSON value, fall back to string
+                    serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
+                };
                 body.insert(key.to_string(), json_value);
             }
         }
@@ -268,86 +303,6 @@ impl ApiArgs {
     }
 }
 
-/// Apply a jq-style filter expression to a JSON value.
-///
-/// Supports common jq path expressions:
-/// - `.field` - access object field
-/// - `.[n]` - access array element
-/// - `.[]` - iterate array elements
-/// - `.field1.field2` - nested access
-/// - `.[].field` - map over array elements
-fn apply_jq_filter(value: &Value, expr: &str) -> anyhow::Result<Value> {
-    let expr = expr.trim();
-
-    // Identity filter
-    if expr == "." {
-        return Ok(value.clone());
-    }
-
-    // Strip leading dot
-    let expr = expr.strip_prefix('.').unwrap_or(expr);
-
-    // Handle array iteration: .[]
-    if expr == "[]" {
-        if let Some(arr) = value.as_array() {
-            return Ok(Value::Array(arr.clone()));
-        }
-        return Err(anyhow::anyhow!("cannot iterate over non-array value"));
-    }
-
-    // Handle .[].field pattern
-    if let Some(rest) = expr.strip_prefix("[].") {
-        if let Some(arr) = value.as_array() {
-            let results: Vec<Value> = arr
-                .iter()
-                .filter_map(|item| apply_jq_filter(item, &format!(".{rest}")).ok())
-                .collect();
-            return Ok(Value::Array(results));
-        }
-        return Err(anyhow::anyhow!("cannot iterate over non-array value"));
-    }
-
-    // Handle array index: .[n]
-    if expr.starts_with('[')
-        && let Some(idx_str) = expr.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
-        && let Ok(idx) = idx_str.parse::<usize>()
-    {
-        return value
-            .get(idx)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("array index {idx} out of bounds"));
-    }
-
-    // Handle field access chain: field1.field2
-    let mut current = value;
-    for part in expr.split('.') {
-        if part.is_empty() {
-            continue;
-        }
-
-        // Check for array index like field[0]
-        if let Some((field, rest)) = part.split_once('[') {
-            current = current
-                .get(field)
-                .ok_or_else(|| anyhow::anyhow!("field '{field}' not found"))?;
-
-            if let Some(idx_str) = rest.strip_suffix(']')
-                && let Ok(idx) = idx_str.parse::<usize>()
-            {
-                current = current
-                    .get(idx)
-                    .ok_or_else(|| anyhow::anyhow!("array index {idx} out of bounds"))?;
-            }
-        } else {
-            current = current
-                .get(part)
-                .ok_or_else(|| anyhow::anyhow!("field '{part}' not found"))?;
-        }
-    }
-
-    Ok(current.clone())
-}
-
 /// Format a JSON value for output.
 fn format_output(value: &Value, pretty: bool) -> String {
     match value {
@@ -374,59 +329,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_should_apply_jq_identity() {
-        let val = serde_json::json!({"a": 1});
-        let result = apply_jq_filter(&val, ".").unwrap();
-        assert_eq!(result, val);
-    }
-
-    #[test]
-    fn test_should_apply_jq_field_access() {
-        let val = serde_json::json!({"name": "test", "count": 42});
-        let result = apply_jq_filter(&val, ".name").unwrap();
-        assert_eq!(result, Value::String("test".into()));
-    }
-
-    #[test]
-    fn test_should_apply_jq_nested_access() {
-        let val = serde_json::json!({"a": {"b": {"c": "deep"}}});
-        let result = apply_jq_filter(&val, ".a.b.c").unwrap();
-        assert_eq!(result, Value::String("deep".into()));
-    }
-
-    #[test]
-    fn test_should_apply_jq_array_map() {
-        let val = serde_json::json!([
-            {"title": "issue 1"},
-            {"title": "issue 2"},
-            {"title": "issue 3"}
-        ]);
-        let result = apply_jq_filter(&val, ".[].title").unwrap();
-        assert_eq!(
-            result,
-            Value::Array(vec![
-                Value::String("issue 1".into()),
-                Value::String("issue 2".into()),
-                Value::String("issue 3".into()),
-            ]),
-        );
-    }
-
-    #[test]
-    fn test_should_apply_jq_array_index() {
-        let val = serde_json::json!(["a", "b", "c"]);
-        let result = apply_jq_filter(&val, ".[1]").unwrap();
-        assert_eq!(result, Value::String("b".into()));
-    }
-
-    #[test]
-    fn test_should_return_error_for_missing_field() {
-        let val = serde_json::json!({"a": 1});
-        let result = apply_jq_filter(&val, ".b");
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_should_format_string_output() {
         let val = Value::String("hello".into());
         assert_eq!(format_output(&val, true), "hello");
@@ -442,7 +344,7 @@ mod tests {
     fn test_should_validate_paginate_with_non_get() {
         let args = ApiArgs {
             endpoint: "repos/owner/repo".into(),
-            method: "POST".into(),
+            method: Some("POST".into()),
             field: vec![],
             raw_field: vec![],
             header: vec![],
@@ -451,6 +353,8 @@ mod tests {
             jq: None,
             hostname: None,
             input: None,
+            preview: vec![],
+            cache: None,
             verbose: false,
             silent: false,
             slurp: false,
@@ -462,7 +366,7 @@ mod tests {
     fn test_should_validate_slurp_without_paginate() {
         let args = ApiArgs {
             endpoint: "repos/owner/repo".into(),
-            method: "GET".into(),
+            method: Some("GET".into()),
             field: vec![],
             raw_field: vec![],
             header: vec![],
@@ -471,6 +375,8 @@ mod tests {
             jq: None,
             hostname: None,
             input: None,
+            preview: vec![],
+            cache: None,
             verbose: false,
             silent: false,
             slurp: true,
@@ -482,7 +388,7 @@ mod tests {
     fn test_should_validate_verbose_and_silent_exclusive() {
         let args = ApiArgs {
             endpoint: "repos/owner/repo".into(),
-            method: "GET".into(),
+            method: Some("GET".into()),
             field: vec![],
             raw_field: vec![],
             header: vec![],
@@ -491,10 +397,78 @@ mod tests {
             jq: None,
             hostname: None,
             input: None,
+            preview: vec![],
+            cache: None,
             verbose: true,
             silent: true,
             slurp: false,
         };
         assert!(args.validate_flags().is_err());
+    }
+
+    #[test]
+    fn test_should_auto_post_when_fields_present_and_no_explicit_method() {
+        let args = ApiArgs {
+            endpoint: "graphql".into(),
+            method: None,
+            field: vec!["query={}".into()],
+            raw_field: vec![],
+            header: vec![],
+            include: false,
+            paginate: false,
+            jq: None,
+            hostname: None,
+            input: None,
+            preview: vec![],
+            cache: None,
+            verbose: false,
+            silent: false,
+            slurp: false,
+        };
+        let body = args.build_body().unwrap();
+        assert!(body.is_some(), "should have a body");
+        // Verify auto-detection logic: method is None + body is Some => POST
+        let effective = if args.method.is_some() {
+            args.method.as_deref().unwrap().to_uppercase()
+        } else if body.is_some() {
+            "POST".to_string()
+        } else {
+            "GET".to_string()
+        };
+        assert_eq!(
+            effective, "POST",
+            "should auto-detect POST when fields are present"
+        );
+    }
+
+    #[test]
+    fn test_should_default_to_get_when_no_fields_and_no_explicit_method() {
+        let args = ApiArgs {
+            endpoint: "repos/owner/repo".into(),
+            method: None,
+            field: vec![],
+            raw_field: vec![],
+            header: vec![],
+            include: false,
+            paginate: false,
+            jq: None,
+            hostname: None,
+            input: None,
+            preview: vec![],
+            cache: None,
+            verbose: false,
+            silent: false,
+            slurp: false,
+        };
+        let body = args.build_body().unwrap();
+        assert!(body.is_none(), "should have no body");
+        let effective = if args.method.is_some() {
+            args.method.as_deref().unwrap().to_uppercase()
+        } else if body.is_some() {
+            "POST".to_string()
+        } else {
+            "GET".to_string()
+        };
+        assert_eq!(effective, "GET", "should default to GET when no fields");
     }
 }

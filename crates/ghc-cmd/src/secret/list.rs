@@ -23,9 +23,25 @@ pub struct ListArgs {
     #[arg(short, long)]
     env: Option<String>,
 
+    /// List secrets for your user (Codespaces).
+    #[arg(short, long)]
+    user: bool,
+
+    /// List secrets for a specific application (actions, codespaces, or dependabot).
+    #[arg(short, long, value_parser = ["actions", "codespaces", "dependabot"])]
+    app: Option<String>,
+
     /// Output JSON with specified fields.
     #[arg(long, value_delimiter = ',')]
     json: Vec<String>,
+
+    /// Filter JSON output using a jq expression.
+    #[arg(short = 'q', long)]
+    jq: Option<String>,
+
+    /// Format JSON output using a Go template.
+    #[arg(short = 't', long)]
+    template: Option<String>,
 }
 
 impl ListArgs {
@@ -35,11 +51,27 @@ impl ListArgs {
     ///
     /// Returns an error if the secrets cannot be listed.
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
+        let entity_count =
+            u8::from(self.org.is_some()) + u8::from(self.env.is_some()) + u8::from(self.user);
+        if entity_count > 1 {
+            anyhow::bail!("specify only one of `--org`, `--env`, or `--user`");
+        }
+
         let client = factory.api_client("github.com")?;
         let ios = &factory.io;
 
+        let app = if let Some(ref a) = self.app {
+            a.as_str()
+        } else if self.user {
+            "codespaces"
+        } else {
+            "actions"
+        };
+
         let path = if let Some(ref org) = self.org {
-            format!("orgs/{org}/actions/secrets")
+            format!("orgs/{org}/{app}/secrets")
+        } else if self.user {
+            "user/codespaces/secrets".to_string()
         } else if let Some(ref env) = self.env {
             let repo = self
                 .repo
@@ -56,7 +88,7 @@ impl ListArgs {
                 anyhow::anyhow!("repository argument required (use -R OWNER/REPO)")
             })?;
             let repo = Repo::from_full_name(repo).context("invalid repository format")?;
-            format!("repos/{}/{}/actions/secrets", repo.owner(), repo.name(),)
+            format!("repos/{}/{}/{app}/secrets", repo.owner(), repo.name(),)
         };
 
         let result: Value = client
@@ -64,15 +96,27 @@ impl ListArgs {
             .await
             .context("failed to list secrets")?;
 
+        // Extract inner array from wrapper object
+        let items = result
+            .get("secrets")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+
         // JSON output
-        if !self.json.is_empty() {
-            ios_println!(ios, "{}", serde_json::to_string_pretty(&result)?);
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let output = ghc_core::json::format_json_output(
+                &items,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
             return Ok(());
         }
 
-        let secrets = result
-            .get("secrets")
-            .and_then(Value::as_array)
+        let secrets = items
+            .as_array()
             .ok_or_else(|| anyhow::anyhow!("unexpected response format"))?;
 
         if secrets.is_empty() {
@@ -128,7 +172,11 @@ mod tests {
             repo: Some("owner/repo".to_string()),
             org: None,
             env: None,
+            user: false,
+            app: None,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
@@ -156,7 +204,11 @@ mod tests {
             repo: None,
             org: Some("myorg".to_string()),
             env: None,
+            user: false,
+            app: None,
             json: vec![],
+            jq: None,
+            template: None,
         };
         args.run(&h.factory).await.unwrap();
 
