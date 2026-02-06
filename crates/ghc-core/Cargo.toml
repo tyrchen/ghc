@@ -1,0 +1,38 @@
+[package]
+name = "ghc-core"
+description = "Core types, traits, and utilities for the GHC GitHub CLI"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+chrono.workspace = true
+console.workspace = true
+dialoguer.workspace = true
+indicatif.workspace = true
+comfy-table.workspace = true
+termimad.workspace = true
+tracing.workspace = true
+url.workspace = true
+regex.workspace = true
+dirs.workspace = true
+open.workspace = true
+keyring.workspace = true
+secrecy.workspace = true
+shlex.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true
+proptest.workspace = true

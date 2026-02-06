@@ -1,0 +1,32 @@
+{
+  "data": {
+    "repository": {
+      "pullRequests": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        },
+        "nodes": [
+          {
+            "number": 42,
+            "title": "Add Rust CLI support",
+            "state": "OPEN",
+            "isDraft": false,
+            "author": { "login": "rustdev" },
+            "headRefName": "feature/rust-cli",
+            "baseRefName": "main",
+            "labels": { "nodes": [{ "name": "feature", "color": "0075ca" }] },
+            "url": "https://github.com/cli/cli/pull/42",
+            "createdAt": "2024-01-08T14:00:00Z",
+            "updatedAt": "2024-01-12T10:00:00Z",
+            "comments": { "totalCount": 8 },
+            "additions": 500,
+            "deletions": 100,
+            "changedFiles": 15,
+            "reviewDecision": "REVIEW_REQUIRED"
+          }
+        ]
+      }
+    }
+  }
+}

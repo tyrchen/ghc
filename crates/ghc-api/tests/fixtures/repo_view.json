@@ -1,0 +1,20 @@
+{
+  "data": {
+    "repository": {
+      "name": "cli",
+      "owner": { "login": "cli" },
+      "description": "GitHub's official command line tool",
+      "url": "https://github.com/cli/cli",
+      "sshUrl": "git@github.com:cli/cli.git",
+      "isFork": false,
+      "isArchived": false,
+      "isPrivate": false,
+      "defaultBranchRef": { "name": "trunk" },
+      "stargazerCount": 36000,
+      "forkCount": 5800,
+      "primaryLanguage": { "name": "Go" },
+      "createdAt": "2019-10-03T18:21:00Z",
+      "updatedAt": "2024-01-15T12:00:00Z"
+    }
+  }
+}

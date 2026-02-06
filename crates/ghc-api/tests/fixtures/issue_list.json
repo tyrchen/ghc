@@ -1,0 +1,38 @@
+{
+  "data": {
+    "repository": {
+      "issues": {
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "Y3Vyc29yOnYyOpHOONNxEg=="
+        },
+        "nodes": [
+          {
+            "number": 100,
+            "title": "Bug: CLI crashes on large repos",
+            "state": "OPEN",
+            "author": { "login": "testuser" },
+            "labels": { "nodes": [{ "name": "bug", "color": "d73a4a" }] },
+            "assignees": { "nodes": [] },
+            "url": "https://github.com/cli/cli/issues/100",
+            "createdAt": "2024-01-10T10:00:00Z",
+            "updatedAt": "2024-01-12T15:30:00Z",
+            "comments": { "totalCount": 5 }
+          },
+          {
+            "number": 99,
+            "title": "Feature request: JSON output",
+            "state": "OPEN",
+            "author": { "login": "contributor" },
+            "labels": { "nodes": [{ "name": "enhancement", "color": "a2eeef" }] },
+            "assignees": { "nodes": [{ "login": "dev1" }] },
+            "url": "https://github.com/cli/cli/issues/99",
+            "createdAt": "2024-01-09T08:00:00Z",
+            "updatedAt": "2024-01-11T12:00:00Z",
+            "comments": { "totalCount": 3 }
+          }
+        ]
+      }
+    }
+  }
+}

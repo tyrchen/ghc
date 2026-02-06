@@ -1,4 +1,6 @@
 [default.extend-words]
+nwo = "nwo"
+hel = "hel"
 
 [files]
 extend-exclude = ["CHANGELOG.md", "notebooks/*", "vendors/*"]

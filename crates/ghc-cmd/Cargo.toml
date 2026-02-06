@@ -1,0 +1,37 @@
+[package]
+name = "ghc-cmd"
+description = "Command implementations for GHC GitHub CLI"
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ghc-core.workspace = true
+ghc-api.workspace = true
+ghc-git.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+clap.workspace = true
+console.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+url.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+wiremock.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true
+mockall.workspace = true
+insta.workspace = true
