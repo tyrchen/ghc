@@ -127,8 +127,10 @@ impl ListArgs {
 
         // JSON output
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let mut arr = items.clone();
+            super::normalize_run_fields_array(&mut arr);
             let output = ghc_core::json::format_json_output(
-                &items,
+                &arr,
                 &self.json,
                 self.jq.as_deref(),
                 self.template.as_deref(),

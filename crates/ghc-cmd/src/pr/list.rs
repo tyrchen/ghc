@@ -141,6 +141,7 @@ impl ListArgs {
         // Always produces output (even [] for empty results)
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
             let mut arr = Value::Array(prs.clone());
+            ghc_core::json::normalize_graphql_connections(&mut arr);
             ghc_core::json::normalize_author(&mut arr);
             let output = ghc_core::json::format_json_output(
                 &arr,

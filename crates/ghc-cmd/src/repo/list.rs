@@ -135,7 +135,8 @@ impl ListArgs {
         // JSON output mode with field filtering, jq, or template
         // Always produces output (even [] for empty results)
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
-            let arr = Value::Array(result.repos.clone());
+            let mut arr = Value::Array(result.repos.clone());
+            ghc_core::json::normalize_graphql_connections(&mut arr);
             let output = ghc_core::json::format_json_output(
                 &arr,
                 &self.json,

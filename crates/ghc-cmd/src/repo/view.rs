@@ -118,8 +118,10 @@ impl ViewArgs {
 
         // JSON output with field filtering, jq, or template
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let mut repo_owned = repo_data.clone();
+            ghc_core::json::normalize_graphql_connections(&mut repo_owned);
             let output = ghc_core::json::format_json_output(
-                repo_data,
+                &repo_owned,
                 &self.json,
                 self.jq.as_deref(),
                 self.template.as_deref(),

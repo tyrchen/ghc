@@ -124,8 +124,10 @@ impl ViewArgs {
 
         // JSON output
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let mut run_owned = run.clone();
+            super::normalize_run_fields(&mut run_owned);
             let output = ghc_core::json::format_json_output(
-                &run,
+                &run_owned,
                 &self.json,
                 self.jq.as_deref(),
                 self.template.as_deref(),

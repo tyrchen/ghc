@@ -70,6 +70,35 @@ fn normalize_release_fields(release: &mut Value) {
     }
 }
 
+/// Compute and insert the `isLatest` field for each release in a JSON array.
+///
+/// The first non-draft, non-prerelease release is marked `isLatest: true`;
+/// all others get `isLatest: false`. This matches `gh release list --json isLatest`.
+fn compute_is_latest(releases: &mut Value) {
+    if let Some(arr) = releases.as_array_mut() {
+        let mut found_latest = false;
+        for release in arr.iter_mut() {
+            if let Some(obj) = release.as_object_mut() {
+                let is_draft = obj
+                    .get("isDraft")
+                    .or_else(|| obj.get("draft"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let is_pre = obj
+                    .get("isPrerelease")
+                    .or_else(|| obj.get("prerelease"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let is_latest = !found_latest && !is_draft && !is_pre;
+                if is_latest {
+                    found_latest = true;
+                }
+                obj.insert("isLatest".to_string(), Value::Bool(is_latest));
+            }
+        }
+    }
+}
+
 impl ReleaseCommand {
     /// Run the selected subcommand.
     ///

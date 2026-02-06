@@ -95,6 +95,7 @@ impl ViewArgs {
         // JSON output with field filtering, jq, or template
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
             let mut pr_owned = pr.clone();
+            ghc_core::json::normalize_graphql_connections(&mut pr_owned);
             ghc_core::json::normalize_author(&mut pr_owned);
             let output = ghc_core::json::format_json_output(
                 &pr_owned,

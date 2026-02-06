@@ -99,7 +99,8 @@ impl ListArgs {
                     r
                 })
                 .collect();
-            let arr = Value::Array(filtered);
+            let mut arr = Value::Array(filtered);
+            super::compute_is_latest(&mut arr);
             let output = ghc_core::json::format_json_output(
                 &arr,
                 &self.json,
