@@ -66,11 +66,13 @@ query RepositoryInfo($owner: String!, $name: String!) {
     name
     owner { login }
     description
+    homepageUrl
     url
     sshUrl
     isFork
     isArchived
     isPrivate
+    isTemplate
     defaultBranchRef { name }
     parent {
       name
@@ -79,7 +81,10 @@ query RepositoryInfo($owner: String!, $name: String!) {
     }
     stargazerCount
     forkCount
+    watchers { totalCount }
     primaryLanguage { name }
+    licenseInfo { name key spdxId }
+    pushedAt
     createdAt
     updatedAt
   }

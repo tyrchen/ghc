@@ -86,12 +86,22 @@ impl ListArgs {
         let client = factory.api_client(repo.host())?;
         let ios = &factory.io;
 
-        let mut path = format!(
-            "repos/{}/{}/actions/runs?per_page={}",
-            repo.owner(),
-            repo.name(),
-            self.limit.min(100),
-        );
+        let mut path = if let Some(ref workflow) = self.workflow {
+            let encoded = ghc_core::text::percent_encode(workflow);
+            format!(
+                "repos/{}/{}/actions/workflows/{encoded}/runs?per_page={}",
+                repo.owner(),
+                repo.name(),
+                self.limit.min(100),
+            )
+        } else {
+            format!(
+                "repos/{}/{}/actions/runs?per_page={}",
+                repo.owner(),
+                repo.name(),
+                self.limit.min(100),
+            )
+        };
         if let Some(ref branch) = self.branch {
             let _ = write!(path, "&branch={branch}");
         }
@@ -167,13 +177,6 @@ impl ListArgs {
             let event = run.get("event").and_then(Value::as_str).unwrap_or("");
             let created_at = run.get("created_at").and_then(Value::as_str).unwrap_or("");
             let updated_at = run.get("updated_at").and_then(Value::as_str).unwrap_or("");
-
-            // Filter by workflow name if specified
-            if let Some(ref wf_filter) = self.workflow
-                && !name.eq_ignore_ascii_case(wf_filter)
-            {
-                continue;
-            }
 
             let (symbol, conclusion_display) = match (status, conclusion) {
                 (_, "success") => (cs.success("\u{2713}"), cs.success("success")),

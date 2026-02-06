@@ -18,9 +18,9 @@ pub struct DiffArgs {
     #[arg(short = 'R', long)]
     repo: String,
 
-    /// Use colored diff output.
-    #[arg(long)]
-    color: bool,
+    /// Use colored diff output (always, never, auto).
+    #[arg(long, default_value = "auto", value_parser = ["always", "never", "auto"])]
+    color: String,
 
     /// Name-only: show only names of changed files.
     #[arg(long)]
@@ -114,7 +114,13 @@ impl DiffArgs {
             .await
             .context("failed to fetch pull request diff")?;
 
-        if self.color {
+        let use_color = match self.color.as_str() {
+            "always" => true,
+            "never" => false,
+            _ => ios.is_stdout_tty(),
+        };
+
+        if use_color {
             // Basic colorization of unified diff output
             let cs = ios.color_scheme();
             for line in diff_text.lines() {
@@ -157,7 +163,7 @@ mod tests {
         let args = DiffArgs {
             number: 40,
             repo: "owner/repo".into(),
-            color: false,
+            color: "auto".into(),
             name_only: true,
             patch: false,
             web: false,
@@ -178,7 +184,7 @@ mod tests {
         let args = DiffArgs {
             number: 40,
             repo: "owner/repo".into(),
-            color: false,
+            color: "auto".into(),
             name_only: false,
             patch: false,
             web: true,
@@ -200,7 +206,7 @@ mod tests {
         let args = DiffArgs {
             number: 1,
             repo: "bad".into(),
-            color: false,
+            color: "auto".into(),
             name_only: false,
             patch: false,
             web: false,

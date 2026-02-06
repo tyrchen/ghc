@@ -109,7 +109,25 @@ impl ApiArgs {
             let endpoint = self.append_query_params(&self.endpoint);
             (endpoint, self.build_body_from_input()?)
         } else {
-            (self.endpoint.clone(), self.build_body()?)
+            let mut body = self.build_body()?;
+            // For GraphQL endpoint, restructure body to nest non-query fields
+            // under "variables" to match gh CLI behavior
+            if self.endpoint == "graphql"
+                && let Some(Value::Object(ref mut map)) = body
+            {
+                let query = map.remove("query");
+                if !map.is_empty() {
+                    let variables = Value::Object(map.clone());
+                    map.clear();
+                    if let Some(q) = query {
+                        map.insert("query".to_string(), q);
+                    }
+                    map.insert("variables".to_string(), variables);
+                } else if let Some(q) = query {
+                    map.insert("query".to_string(), q);
+                }
+            }
+            (self.endpoint.clone(), body)
         };
 
         if self.verbose {

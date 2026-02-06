@@ -120,6 +120,7 @@ impl ViewArgs {
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
             let mut repo_owned = repo_data.clone();
             ghc_core::json::normalize_graphql_connections(&mut repo_owned);
+            normalize_repo_json_fields(&mut repo_owned);
             let output = ghc_core::json::format_json_output(
                 &repo_owned,
                 &self.json,
@@ -250,6 +251,37 @@ impl ViewArgs {
                 if text.is_empty() { None } else { Some(text) }
             }
             Err(_) => None,
+        }
+    }
+}
+
+/// Normalize repo JSON fields to match gh CLI conventions.
+///
+/// Flattens `watchers: {totalCount: N}` to `watchers: N`,
+/// flattens `issues: {totalCount: N}` to `openIssueCount: N`,
+/// flattens `pullRequests: {totalCount: N}` to `openPullRequestCount: N`.
+fn normalize_repo_json_fields(value: &mut Value) {
+    if let Some(obj) = value.as_object_mut() {
+        // Flatten watchers { totalCount: N } -> watchers: N
+        if let Some(w) = obj.get("watchers")
+            && let Some(tc) = w.get("totalCount")
+        {
+            let count = tc.clone();
+            obj.insert("watchers".to_string(), count);
+        }
+        // Flatten issues { totalCount: N } -> openIssueCount: N
+        if let Some(i) = obj.get("issues")
+            && let Some(tc) = i.get("totalCount")
+        {
+            let count = tc.clone();
+            obj.insert("openIssueCount".to_string(), count);
+        }
+        // Flatten pullRequests { totalCount: N } -> openPullRequestCount: N
+        if let Some(pr) = obj.get("pullRequests")
+            && let Some(tc) = pr.get("totalCount")
+        {
+            let count = tc.clone();
+            obj.insert("openPullRequestCount".to_string(), count);
         }
     }
 }

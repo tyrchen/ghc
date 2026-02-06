@@ -92,6 +92,19 @@ impl ViewArgs {
         // (gh uses isDraft/isPrerelease/tagName/publishedAt/createdAt)
         super::normalize_release_fields(&mut release);
 
+        // For single release view, compute isLatest:
+        // - If fetched via "latest" endpoint, it is the latest
+        // - Otherwise, check draft/prerelease status (non-draft, non-prerelease = potentially latest)
+        if let Some(obj) = release.as_object_mut() {
+            let is_draft = obj.get("isDraft").and_then(Value::as_bool).unwrap_or(false);
+            let is_pre = obj
+                .get("isPrerelease")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let is_latest = self.tag == "latest" || (!is_draft && !is_pre);
+            obj.insert("isLatest".to_string(), Value::Bool(is_latest));
+        }
+
         // JSON output
         let ios = &factory.io;
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {

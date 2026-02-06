@@ -62,7 +62,15 @@ impl ListArgs {
 
         // JSON output
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
-            let arr = Value::Array(labels.clone());
+            let normalized: Vec<Value> = labels
+                .iter()
+                .cloned()
+                .map(|mut l| {
+                    normalize_label_fields(&mut l);
+                    l
+                })
+                .collect();
+            let arr = Value::Array(normalized);
             let output = ghc_core::json::format_json_output(
                 &arr,
                 &self.json,
@@ -103,6 +111,24 @@ impl ListArgs {
         ios_println!(ios, "{output}");
 
         Ok(())
+    }
+}
+
+/// Normalize REST API label fields to match gh CLI conventions.
+///
+/// Maps `default` -> `isDefault`, converts null `description` to empty string.
+fn normalize_label_fields(label: &mut Value) {
+    if let Some(obj) = label.as_object_mut() {
+        // Map "default" -> "isDefault"
+        if let Some(val) = obj.get("default").cloned() {
+            obj.insert("isDefault".to_string(), val);
+        }
+        // Convert null description to empty string
+        if let Some(desc) = obj.get("description")
+            && desc.is_null()
+        {
+            obj.insert("description".to_string(), Value::String(String::new()));
+        }
     }
 }
 

@@ -104,8 +104,10 @@ impl ListArgs {
 
         // JSON output
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let mut items_owned = items.clone();
+            normalize_secret_fields(&mut items_owned);
             let output = ghc_core::json::format_json_output(
-                &items,
+                &items_owned,
                 &self.json,
                 self.jq.as_deref(),
                 self.template.as_deref(),
@@ -143,6 +145,30 @@ impl ListArgs {
         ios_println!(ios, "{output}");
 
         Ok(())
+    }
+}
+
+/// Normalize secret fields to match gh CLI conventions.
+///
+/// Ensures `visibility` field is present (empty string for repo-level secrets),
+/// maps `updated_at` -> `updatedAt`, `created_at` -> `createdAt`.
+fn normalize_secret_fields(value: &mut Value) {
+    if let Some(arr) = value.as_array_mut() {
+        for secret in arr {
+            if let Some(obj) = secret.as_object_mut() {
+                // Ensure visibility is present (gh always includes it)
+                if !obj.contains_key("visibility") {
+                    obj.insert("visibility".to_string(), Value::String(String::new()));
+                }
+                // Map snake_case -> camelCase
+                if let Some(val) = obj.get("updated_at").cloned() {
+                    obj.insert("updatedAt".to_string(), val);
+                }
+                if let Some(val) = obj.get("created_at").cloned() {
+                    obj.insert("createdAt".to_string(), val);
+                }
+            }
+        }
     }
 }
 
