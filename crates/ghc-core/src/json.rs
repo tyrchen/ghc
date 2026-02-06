@@ -2,6 +2,8 @@
 //!
 //! Provides `--json` field selector support matching the Go CLI's behavior.
 
+use std::fmt::Write;
+
 use serde_json::Value;
 
 /// Filter a JSON value to only include the specified fields.
@@ -104,7 +106,7 @@ pub fn format_json_with_fields(
     fields: &[String],
 ) -> Result<String, serde_json::Error> {
     let filtered = filter_json_fields(value, fields);
-    serde_json::to_string_pretty(&filtered)
+    serde_json::to_string(&filtered)
 }
 
 /// Format JSON output applying field selection, jq filtering, or template rendering.
@@ -124,6 +126,11 @@ pub fn format_json_output(
     jq_expr: Option<&str>,
     template: Option<&str>,
 ) -> anyhow::Result<String> {
+    // Validate requested field names against available fields
+    if !fields.is_empty() {
+        validate_json_fields(value, fields)?;
+    }
+
     let filtered = filter_json_fields(value, fields);
 
     if let Some(jq) = jq_expr {
@@ -134,8 +141,148 @@ pub fn format_json_output(
         return crate::export::apply_template(&filtered, tmpl);
     }
 
-    serde_json::to_string_pretty(&filtered)
-        .map_err(|e| anyhow::anyhow!("failed to serialize JSON: {e}"))
+    serde_json::to_string(&filtered).map_err(|e| anyhow::anyhow!("failed to serialize JSON: {e}"))
+}
+
+/// Validate that requested JSON fields exist in the value.
+///
+/// Checks each field against the available keys (including camelCase/snake_case
+/// aliases). Returns an error listing unknown fields and available alternatives.
+fn validate_json_fields(value: &Value, fields: &[String]) -> anyhow::Result<()> {
+    let available_keys: Vec<&str> = match value {
+        Value::Object(map) => map.keys().map(String::as_str).collect(),
+        Value::Array(arr) => {
+            // For arrays, check the first element
+            if let Some(Value::Object(map)) = arr.first() {
+                map.keys().map(String::as_str).collect()
+            } else {
+                return Ok(());
+            }
+        }
+        _ => return Ok(()),
+    };
+
+    if available_keys.is_empty() {
+        return Ok(());
+    }
+
+    let mut unknown = Vec::new();
+    for field in fields {
+        let found = available_keys.contains(&field.as_str())
+            || available_keys.contains(&to_snake_case(field).as_str())
+            || available_keys.contains(&to_camel_case(field).as_str());
+        if !found {
+            unknown.push(field.as_str());
+        }
+    }
+
+    if unknown.is_empty() {
+        return Ok(());
+    }
+
+    let mut msg = String::new();
+    for field in &unknown {
+        let _ = writeln!(msg, "Unknown JSON field: \"{field}\"");
+    }
+    msg.push_str("Available fields:\n");
+    let mut sorted_keys: Vec<&str> = available_keys;
+    sorted_keys.sort_unstable();
+    for key in &sorted_keys {
+        let _ = writeln!(msg, "  {key}");
+    }
+
+    anyhow::bail!("{}", msg.trim_end())
+}
+
+/// Normalize GraphQL connection types for `gh` CLI compatibility.
+///
+/// Flattens GraphQL connection patterns in the JSON value:
+/// - `{"labels": {"nodes": [...]}}` -> `{"labels": [...]}`
+/// - `{"assignees": {"nodes": [...]}}` -> `{"assignees": [...]}`
+/// - `{"comments": {"nodes": [...]}}` -> `{"comments": [...]}`
+/// - `{"reviewRequests": {"nodes": [...]}}` -> `{"reviewRequests": [...]}`
+/// - `{"reviews": {"nodes": [...]}}` -> `{"reviews": [...]}`
+/// - `{"projectCards": {"nodes": [...]}}` -> `{"projectCards": [...]}`
+/// - `{"milestone": {"title": "..."}}` stays as-is (not a connection)
+///
+/// Also normalizes `{"comments": {"totalCount": N}}` (no nodes) to `{"comments": []}`
+/// when actual comment data is not available (preserving backward compat).
+pub fn normalize_graphql_connections(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            // Known connection fields that use `{ nodes: [...] }` pattern
+            let connection_fields = [
+                "labels",
+                "assignees",
+                "comments",
+                "reviewRequests",
+                "reviews",
+                "projectCards",
+                "participants",
+                "projectItems",
+                "timelineItems",
+                "files",
+                "latestReviews",
+            ];
+
+            for field_name in &connection_fields {
+                if let Some(field_val) = map.get_mut(*field_name)
+                    && let Some(obj) = field_val.as_object()
+                {
+                    if let Some(nodes) = obj.get("nodes") {
+                        // Flatten: replace `{nodes: [...]}` with just `[...]`
+                        *field_val = nodes.clone();
+                    } else if obj.contains_key("totalCount") && !obj.contains_key("nodes") {
+                        // Only totalCount, no actual data -- provide empty array
+                        *field_val = Value::Array(vec![]);
+                    }
+                }
+            }
+
+            // Recurse into all values
+            for v in map.values_mut() {
+                normalize_graphql_connections(v);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                normalize_graphql_connections(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Normalize author fields in a JSON value for `gh` CLI compatibility.
+///
+/// Converts `__typename` to `is_bot` (true if typename is "Bot") and removes
+/// `__typename` from author objects. Works recursively on objects and arrays.
+pub fn normalize_author(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            // If this object has an "author" key, normalize it
+            if let Some(author) = map.get_mut("author")
+                && let Some(obj) = author.as_object_mut()
+            {
+                let is_bot = obj
+                    .get("__typename")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| t == "Bot");
+                obj.insert("is_bot".to_string(), Value::Bool(is_bot));
+                obj.remove("__typename");
+            }
+            // Recurse into all values
+            for v in map.values_mut() {
+                normalize_author(v);
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                normalize_author(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -207,5 +354,51 @@ mod tests {
         let result = format_json_with_fields(&data, &["name".to_string()]).unwrap();
         assert!(result.contains("\"name\""));
         assert!(!result.contains("extra"));
+    }
+
+    #[test]
+    fn test_should_normalize_author_user() {
+        let mut data = json!({
+            "title": "Test",
+            "author": {
+                "login": "octocat",
+                "id": "MDQ6VXNlcjE=",
+                "name": "The Octocat",
+                "__typename": "User"
+            }
+        });
+        normalize_author(&mut data);
+        let author = data.get("author").unwrap();
+        assert_eq!(author.get("login").unwrap(), "octocat");
+        assert_eq!(author.get("is_bot").unwrap(), false);
+        assert!(author.get("__typename").is_none());
+    }
+
+    #[test]
+    fn test_should_normalize_author_bot() {
+        let mut data = json!({
+            "title": "Test",
+            "author": {
+                "login": "dependabot[bot]",
+                "id": "MDM6Qm90NDk2OTkzMzM=",
+                "__typename": "Bot"
+            }
+        });
+        normalize_author(&mut data);
+        let author = data.get("author").unwrap();
+        assert_eq!(author.get("is_bot").unwrap(), true);
+        assert!(author.get("__typename").is_none());
+    }
+
+    #[test]
+    fn test_should_normalize_author_in_array() {
+        let mut data = json!([
+            {"title": "A", "author": {"login": "user1", "__typename": "User"}},
+            {"title": "B", "author": {"login": "bot1", "__typename": "Bot"}},
+        ]);
+        normalize_author(&mut data);
+        let arr = data.as_array().unwrap();
+        assert_eq!(arr[0]["author"]["is_bot"], false);
+        assert_eq!(arr[1]["author"]["is_bot"], true);
     }
 }

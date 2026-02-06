@@ -75,14 +75,7 @@ impl ListArgs {
             .await
             .context("failed to list releases")?;
 
-        if releases.is_empty() {
-            if ios.is_stdout_tty() {
-                ios_eprintln!(ios, "No releases found in {}", repo.full_name());
-            }
-            return Ok(());
-        }
-
-        // JSON output mode
+        // JSON output mode - always produces output (even [] for empty results)
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
             let filtered: Vec<Value> = releases
                 .iter()
@@ -101,6 +94,10 @@ impl ListArgs {
                     true
                 })
                 .cloned()
+                .map(|mut r| {
+                    super::normalize_release_fields(&mut r);
+                    r
+                })
                 .collect();
             let arr = Value::Array(filtered);
             let output = ghc_core::json::format_json_output(
@@ -111,6 +108,13 @@ impl ListArgs {
             )
             .context("failed to format JSON output")?;
             ios_println!(ios, "{output}");
+            return Ok(());
+        }
+
+        if releases.is_empty() {
+            if ios.is_stdout_tty() {
+                ios_eprintln!(ios, "No releases found in {}", repo.full_name());
+            }
             return Ok(());
         }
 

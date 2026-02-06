@@ -54,10 +54,16 @@ impl ListArgs {
             .await
             .context("failed to list codespaces")?;
 
+        // Extract inner array from wrapper object
+        let items = result
+            .get("codespaces")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+
         // JSON output
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
             let output = ghc_core::json::format_json_output(
-                &result,
+                &items,
                 &self.json,
                 self.jq.as_deref(),
                 self.template.as_deref(),
@@ -67,9 +73,8 @@ impl ListArgs {
             return Ok(());
         }
 
-        let codespaces = result
-            .get("codespaces")
-            .and_then(Value::as_array)
+        let codespaces = items
+            .as_array()
             .ok_or_else(|| anyhow::anyhow!("unexpected response format"))?;
 
         if codespaces.is_empty() {

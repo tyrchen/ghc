@@ -79,21 +79,25 @@ impl ViewArgs {
             .await
             .context("failed to fetch pull request")?;
 
-        let pr = data.pointer("/repository/pullRequest").ok_or_else(|| {
-            anyhow::anyhow!(
-                "pull request #{} not found in {}",
-                self.number,
-                repo.full_name(),
-            )
-        })?;
+        let pr = data
+            .pointer("/repository/pullRequest")
+            .filter(|v| !v.is_null())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Could not resolve to a PullRequest with the number of {}",
+                    self.number,
+                )
+            })?;
 
         let ios = &factory.io;
         let cs = ios.color_scheme();
 
         // JSON output with field filtering, jq, or template
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let mut pr_owned = pr.clone();
+            ghc_core::json::normalize_author(&mut pr_owned);
             let output = ghc_core::json::format_json_output(
-                pr,
+                &pr_owned,
                 &self.json,
                 self.jq.as_deref(),
                 self.template.as_deref(),
@@ -209,9 +213,10 @@ impl ViewArgs {
 
     /// Fetch and print PR comments via REST API.
     ///
-    /// Fetches both issue comments and review comments, then displays them
-    /// in chronological order. This matches `gh pr view --comments` behavior
-    /// which shows all comment types.
+    /// Fetches issue comments, inline review comments, and top-level review
+    /// comments, then displays them in chronological order. This matches
+    /// `gh pr view --comments` behavior which shows all comment types.
+    #[allow(clippy::too_many_lines)]
     async fn print_comments(
         &self,
         client: &ghc_api::client::Client,
@@ -231,26 +236,69 @@ impl ViewArgs {
             .await
             .context("failed to fetch issue comments")?;
 
-        // Fetch review comments (inline code review comments)
-        let review_path = format!(
+        // Fetch inline review comments (code-level comments)
+        let review_comments_path = format!(
             "repos/{}/{}/pulls/{}/comments",
             repo.owner(),
             repo.name(),
             self.number,
         );
         let review_comments: Vec<Value> = client
-            .rest(reqwest::Method::GET, &review_path, None)
+            .rest(reqwest::Method::GET, &review_comments_path, None)
             .await
             .context("failed to fetch review comments")?;
 
-        // Merge and sort by created_at
+        // Fetch top-level review comments (review body with status like COMMENTED, APPROVED, etc.)
+        let reviews_path = format!(
+            "repos/{}/{}/pulls/{}/reviews",
+            repo.owner(),
+            repo.name(),
+            self.number,
+        );
+        let reviews: Vec<Value> = client
+            .rest(reqwest::Method::GET, &reviews_path, None)
+            .await
+            .context("failed to fetch reviews")?;
+
+        // Convert non-empty review bodies into comment-like objects
+        let review_body_comments: Vec<Value> = reviews
+            .into_iter()
+            .filter(|r| {
+                r.get("body")
+                    .and_then(Value::as_str)
+                    .is_some_and(|b| !b.is_empty())
+            })
+            .map(|r| {
+                let state = r
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .unwrap_or("COMMENTED");
+                let mut comment = r.clone();
+                // Add a review_state marker so we can display it
+                comment.as_object_mut().map(|m| {
+                    m.insert("review_state".to_string(), Value::String(state.to_string()))
+                });
+                comment
+            })
+            .collect();
+
+        // Merge and sort by submitted_at/created_at
         let mut all_comments: Vec<&Value> = issue_comments
             .iter()
             .chain(review_comments.iter())
+            .chain(review_body_comments.iter())
             .collect();
         all_comments.sort_by(|a, b| {
-            let a_date = a.get("created_at").and_then(Value::as_str).unwrap_or("");
-            let b_date = b.get("created_at").and_then(Value::as_str).unwrap_or("");
+            let a_date = a
+                .get("submitted_at")
+                .or_else(|| a.get("created_at"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let b_date = b
+                .get("submitted_at")
+                .or_else(|| b.get("created_at"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
             a_date.cmp(b_date)
         });
 
@@ -268,21 +316,35 @@ impl ViewArgs {
                 .and_then(Value::as_str)
                 .unwrap_or("ghost");
             let body = comment.get("body").and_then(Value::as_str).unwrap_or("");
-            let created_at = comment
-                .get("created_at")
+            let timestamp = comment
+                .get("submitted_at")
+                .or_else(|| comment.get("created_at"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
             let diff_hunk = comment.get("diff_hunk").and_then(Value::as_str);
             let file_path = comment.get("path").and_then(Value::as_str);
+            let review_state = comment.get("review_state").and_then(Value::as_str);
+
+            let action = if let Some(state) = review_state {
+                match state {
+                    "APPROVED" => "approved",
+                    "CHANGES_REQUESTED" => "requested changes",
+                    "DISMISSED" => "dismissed review",
+                    _ => "commented",
+                }
+            } else {
+                "commented"
+            };
 
             ios_println!(
                 ios,
-                "\n{} commented {}",
+                "\n{} {} {}",
                 cs.bold(author),
-                cs.gray(created_at),
+                action,
+                cs.gray(timestamp),
             );
 
-            // Show file context for review comments
+            // Show file context for inline review comments
             if let Some(path) = file_path {
                 ios_println!(ios, "{}", cs.gray(&format!("  {path}")));
             }
@@ -409,7 +471,7 @@ mod tests {
         args.run(&h.factory).await.unwrap();
         let out = h.stdout();
         assert!(
-            out.contains("\"number\": 42"),
+            out.contains("\"number\":42"),
             "should contain JSON number: {out}"
         );
     }
@@ -454,6 +516,19 @@ mod tests {
             ]),
         )
         .await;
+        mock_rest_get(
+            &h.server,
+            "/repos/owner/repo/pulls/42/reviews",
+            serde_json::json!([
+                {
+                    "user": { "login": "lead-reviewer" },
+                    "body": "Overall looks great, ship it!",
+                    "state": "APPROVED",
+                    "submitted_at": "2024-01-16T12:00:00Z"
+                }
+            ]),
+        )
+        .await;
 
         let args = ViewArgs {
             number: 42,
@@ -486,6 +561,18 @@ mod tests {
         assert!(
             out.contains("Consider renaming"),
             "should contain review comment body: {out}"
+        );
+        assert!(
+            out.contains("lead-reviewer"),
+            "should contain review body author: {out}"
+        );
+        assert!(
+            out.contains("Overall looks great"),
+            "should contain review body text: {out}"
+        );
+        assert!(
+            out.contains("approved"),
+            "should contain review state: {out}"
         );
     }
 
@@ -520,7 +607,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_return_error_on_pr_not_found() {
         let h = TestHarness::new().await;
-        // When pullRequest is missing entirely (not null), pointer returns None
+        // When pullRequest is missing entirely, pointer returns None
         let response = serde_json::json!({
             "data": {
                 "repository": {}
@@ -540,6 +627,46 @@ mod tests {
 
         let result = args.run(&h.factory).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Could not resolve"),
+            "should report not found error",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_return_error_on_pr_null() {
+        let h = TestHarness::new().await;
+        // When pullRequest is null (nonexistent PR number), filter catches it
+        let response = serde_json::json!({
+            "data": {
+                "repository": {
+                    "pullRequest": null
+                }
+            }
+        });
+        mock_graphql(&h.server, "PullRequestView", response).await;
+
+        let args = ViewArgs {
+            number: 99999,
+            repo: "owner/repo".into(),
+            web: false,
+            comments: false,
+            json: vec![],
+            jq: None,
+            template: None,
+        };
+
+        let result = args.run(&h.factory).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Could not resolve"),
+            "should report not found error for null PR",
+        );
     }
 }

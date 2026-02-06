@@ -132,6 +132,21 @@ impl ListArgs {
             );
         }
 
+        // JSON output mode with field filtering, jq, or template
+        // Always produces output (even [] for empty results)
+        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let arr = Value::Array(result.repos.clone());
+            let output = ghc_core::json::format_json_output(
+                &arr,
+                &self.json,
+                self.jq.as_deref(),
+                self.template.as_deref(),
+            )
+            .context("failed to format JSON output")?;
+            ios_println!(ios, "{output}");
+            return Ok(());
+        }
+
         if result.repos.is_empty() {
             if self.has_filters() {
                 ios_eprintln!(ios, "No results match your search");
@@ -149,20 +164,6 @@ impl ListArgs {
                 ios,
                 "warning: this query uses the Search API which is capped at 1000 results maximum"
             );
-        }
-
-        // JSON output mode with field filtering, jq, or template
-        if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
-            let arr = Value::Array(result.repos.clone());
-            let output = ghc_core::json::format_json_output(
-                &arr,
-                &self.json,
-                self.jq.as_deref(),
-                self.template.as_deref(),
-            )
-            .context("failed to format JSON output")?;
-            ios_println!(ios, "{output}");
-            return Ok(());
         }
 
         // Header (TTY only)

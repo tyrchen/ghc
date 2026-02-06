@@ -261,6 +261,11 @@ impl AuthConfig for FileConfig {
             return Some((token, "GITHUB_TOKEN".to_string()));
         }
 
+        // Check keyring before config file (matches gh CLI behavior)
+        if let Ok(Some(token)) = crate::keyring_store::get_token(hostname) {
+            return Some((token, "keyring".to_string()));
+        }
+
         let host = self.hosts.get(hostname)?;
         let token = host.oauth_token.as_ref()?;
         Some((token.clone(), "config".to_string()))
@@ -340,6 +345,10 @@ impl AuthConfig for FileConfig {
         let host = self.hosts.get(hostname)?;
         // Check if it's the active user first
         if host.user.as_deref() == Some(username) {
+            // Check keyring first (matches gh CLI behavior)
+            if let Ok(Some(token)) = crate::keyring_store::get_token(hostname) {
+                return Some((token, "keyring".to_string()));
+            }
             let token = host.oauth_token.as_ref()?;
             return Some((token.clone(), "config".to_string()));
         }

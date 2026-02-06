@@ -88,13 +88,11 @@ impl ApiArgs {
         let client = factory.api_client(hostname)?;
         let ios = &factory.io;
 
-        let body = self.build_body()?;
-
-        // Auto-detect method: if user didn't pass -X explicitly and there are
-        // parameters or input, default to POST (matching Go CLI behavior).
+        // Determine effective method first
+        let has_params = !self.field.is_empty() || !self.raw_field.is_empty();
         let effective_method = if let Some(ref m) = self.method {
             m.to_uppercase()
-        } else if body.is_some() {
+        } else if has_params || self.input.is_some() {
             "POST".to_string()
         } else {
             "GET".to_string()
@@ -103,8 +101,19 @@ impl ApiArgs {
             .parse()
             .map_err(|_| anyhow::anyhow!("invalid HTTP method: {effective_method}"))?;
 
+        // For GET/HEAD/DELETE, append params as query string instead of body
+        let (endpoint, body) = if method == reqwest::Method::GET
+            || method == reqwest::Method::HEAD
+            || method == reqwest::Method::DELETE
+        {
+            let endpoint = self.append_query_params(&self.endpoint);
+            (endpoint, self.build_body_from_input()?)
+        } else {
+            (self.endpoint.clone(), self.build_body()?)
+        };
+
         if self.verbose {
-            ios_eprintln!(ios, "> {} /{}", method, self.endpoint);
+            ios_eprintln!(ios, "> {} /{}", method, endpoint);
             for h in &self.header {
                 ios_eprintln!(ios, "> {h}");
             }
@@ -112,26 +121,27 @@ impl ApiArgs {
         }
 
         if self.paginate {
-            self.run_paginated(&client, &method, body.as_ref(), factory)
+            self.run_paginated_with_endpoint(&client, &method, &endpoint, body.as_ref(), factory)
                 .await
         } else {
-            self.run_single(&client, &method, body.as_ref(), factory)
+            self.run_single_with_endpoint(&client, &method, &endpoint, body.as_ref(), factory)
                 .await
         }
     }
 
     /// Run a single (non-paginated) API request.
-    async fn run_single(
+    async fn run_single_with_endpoint(
         &self,
         client: &ghc_api::client::Client,
         method: &reqwest::Method,
+        endpoint: &str,
         body: Option<&Value>,
         factory: &crate::factory::Factory,
     ) -> anyhow::Result<()> {
         let ios = &factory.io;
 
         let result: Value = client
-            .rest(method.clone(), &self.endpoint, body)
+            .rest(method.clone(), endpoint, body)
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -139,17 +149,18 @@ impl ApiArgs {
     }
 
     /// Run paginated API requests, fetching all pages.
-    async fn run_paginated(
+    async fn run_paginated_with_endpoint(
         &self,
         client: &ghc_api::client::Client,
         method: &reqwest::Method,
+        endpoint: &str,
         body: Option<&Value>,
         factory: &crate::factory::Factory,
     ) -> anyhow::Result<()> {
         let ios = &factory.io;
 
         // Add per_page parameter if not already present
-        let mut endpoint = self.endpoint.clone();
+        let mut endpoint = endpoint.to_string();
         if !endpoint.contains("per_page=") {
             let separator = if endpoint.contains('?') { "&" } else { "?" };
             endpoint = format!("{endpoint}{separator}per_page=100");
@@ -245,6 +256,53 @@ impl ApiArgs {
         }
 
         Ok(())
+    }
+
+    /// Append -f and -F parameters as query string for GET requests.
+    fn append_query_params(&self, endpoint: &str) -> String {
+        let mut params: Vec<String> = Vec::new();
+        for field in &self.field {
+            if let Some((key, value)) = field.split_once('=') {
+                params.push(format!(
+                    "{}={}",
+                    ghc_core::text::percent_encode(key),
+                    ghc_core::text::percent_encode(value),
+                ));
+            }
+        }
+        for field in &self.raw_field {
+            if let Some((key, value)) = field.split_once('=') {
+                params.push(format!(
+                    "{}={}",
+                    ghc_core::text::percent_encode(key),
+                    ghc_core::text::percent_encode(value),
+                ));
+            }
+        }
+        if params.is_empty() {
+            return endpoint.to_string();
+        }
+        let separator = if endpoint.contains('?') { "&" } else { "?" };
+        format!("{endpoint}{separator}{}", params.join("&"))
+    }
+
+    /// Build body only from --input flag (used for GET requests where -f params become query strings).
+    fn build_body_from_input(&self) -> anyhow::Result<Option<Value>> {
+        if let Some(ref input_path) = self.input {
+            if input_path == "-" {
+                use std::io::Read;
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)?;
+                let parsed: Value = serde_json::from_str(&buf)?;
+                return Ok(Some(parsed));
+            }
+            let content = std::fs::read_to_string(input_path)
+                .with_context(|| format!("failed to read input file: {input_path}"))?;
+            let parsed: Value = serde_json::from_str(&content)
+                .with_context(|| format!("failed to parse JSON from {input_path}"))?;
+            return Ok(Some(parsed));
+        }
+        Ok(None)
     }
 
     fn build_body(&self) -> anyhow::Result<Option<Value>> {

@@ -6,6 +6,8 @@ use serde_json::Value;
 
 use ghc_core::ios_println;
 use ghc_core::repo::Repo;
+use ghc_core::table::TablePrinter;
+use ghc_core::text;
 
 /// View details about a workflow.
 #[derive(Debug, Args)]
@@ -45,6 +47,7 @@ impl ViewArgs {
     /// # Errors
     ///
     /// Returns an error if the workflow cannot be viewed.
+    #[allow(clippy::too_many_lines)]
     pub async fn run(&self, factory: &crate::factory::Factory) -> Result<()> {
         let repo = self
             .repo
@@ -103,6 +106,71 @@ impl ViewArgs {
         ios_println!(ios, "ID: {id}");
         ios_println!(ios, "State: {state}");
         ios_println!(ios, "Path: {wf_path}");
+
+        // Fetch and display recent runs
+        let runs_path = format!(
+            "repos/{}/{}/actions/workflows/{}/runs?per_page=5",
+            repo.owner(),
+            repo.name(),
+            self.workflow,
+        );
+        if let Ok(runs_data) = client
+            .rest::<Value>(reqwest::Method::GET, &runs_path, None)
+            .await
+        {
+            let total_count = runs_data
+                .get("total_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let runs = runs_data
+                .get("workflow_runs")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+
+            ios_println!(ios, "Total runs: {total_count}");
+
+            if !runs.is_empty() {
+                ios_println!(ios, "\n{}", cs.bold("Recent runs"));
+                let mut tp = TablePrinter::new(ios);
+                for run in &runs {
+                    let status = run
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    let conclusion = run.get("conclusion").and_then(Value::as_str).unwrap_or("");
+                    let run_title = run
+                        .get("display_title")
+                        .or_else(|| run.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let branch = run.get("head_branch").and_then(Value::as_str).unwrap_or("");
+                    let event = run.get("event").and_then(Value::as_str).unwrap_or("");
+                    let run_id = run.get("id").and_then(Value::as_u64).unwrap_or(0);
+                    let created_at = run.get("created_at").and_then(Value::as_str).unwrap_or("");
+
+                    let status_display = match (status, conclusion) {
+                        (_, "success") => cs.success("completed"),
+                        (_, "failure") => cs.error("failed"),
+                        (_, "cancelled") => cs.gray("cancelled"),
+                        ("in_progress", _) => cs.warning("in progress"),
+                        ("queued", _) => cs.gray("queued"),
+                        _ => status.to_string(),
+                    };
+
+                    tp.add_row(vec![
+                        status_display,
+                        text::truncate(run_title, 40),
+                        branch.to_string(),
+                        event.to_string(),
+                        run_id.to_string(),
+                        created_at.to_string(),
+                    ]);
+                }
+                ios_println!(ios, "{}", tp.render());
+            }
+        }
+
         ios_println!(ios, "\n{}", ghc_core::text::display_url(html_url));
 
         if self.yaml {

@@ -137,20 +137,11 @@ impl ListArgs {
 
         let ios = &factory.io;
 
-        if prs.is_empty() {
-            if ios.is_stdout_tty() {
-                ios_eprintln!(
-                    ios,
-                    "No pull requests match your search in {}",
-                    repo.full_name()
-                );
-            }
-            return Ok(());
-        }
-
         // JSON output mode with field filtering, jq, or template
+        // Always produces output (even [] for empty results)
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
-            let arr = Value::Array(prs.clone());
+            let mut arr = Value::Array(prs.clone());
+            ghc_core::json::normalize_author(&mut arr);
             let output = ghc_core::json::format_json_output(
                 &arr,
                 &self.json,
@@ -159,6 +150,17 @@ impl ListArgs {
             )
             .context("failed to format JSON output")?;
             ios_println!(ios, "{output}");
+            return Ok(());
+        }
+
+        if prs.is_empty() {
+            if ios.is_stdout_tty() {
+                ios_eprintln!(
+                    ios,
+                    "No pull requests match your search in {}",
+                    repo.full_name()
+                );
+            }
             return Ok(());
         }
 
@@ -305,7 +307,7 @@ mod tests {
         args.run(&h.factory).await.unwrap();
         let out = h.stdout();
         assert!(
-            out.contains("\"number\": 5"),
+            out.contains("\"number\":5"),
             "should contain JSON number: {out}"
         );
     }

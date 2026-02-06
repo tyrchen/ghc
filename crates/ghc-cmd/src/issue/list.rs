@@ -129,19 +129,6 @@ impl ListArgs {
             .and_then(Value::as_array)
             .ok_or_else(|| anyhow::anyhow!("unexpected API response format"))?;
 
-        if issues.is_empty() {
-            if ios.is_stdout_tty() {
-                let cs = ios.color_scheme();
-                ios_eprintln!(
-                    ios,
-                    "{} No issues match your search in {}",
-                    cs.warning_icon(),
-                    repo.full_name(),
-                );
-            }
-            return Ok(());
-        }
-
         // Apply client-side author filter if specified
         let filtered: Vec<&Value> = issues
             .iter()
@@ -159,8 +146,11 @@ impl ListArgs {
             .collect();
 
         // JSON output mode with field filtering, jq, or template
+        // Always produces output (even [] for empty results)
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
-            let arr = Value::Array(filtered.iter().map(|v| (*v).clone()).collect());
+            let mut arr = Value::Array(filtered.iter().map(|v| (*v).clone()).collect());
+            ghc_core::json::normalize_graphql_connections(&mut arr);
+            ghc_core::json::normalize_author(&mut arr);
             let output = ghc_core::json::format_json_output(
                 &arr,
                 &self.json,
@@ -169,6 +159,19 @@ impl ListArgs {
             )
             .context("failed to format JSON output")?;
             ios_println!(ios, "{output}");
+            return Ok(());
+        }
+
+        if filtered.is_empty() {
+            if ios.is_stdout_tty() {
+                let cs = ios.color_scheme();
+                ios_eprintln!(
+                    ios,
+                    "{} No issues match your search in {}",
+                    cs.warning_icon(),
+                    repo.full_name(),
+                );
+            }
             return Ok(());
         }
 

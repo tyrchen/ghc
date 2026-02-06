@@ -57,10 +57,23 @@ pub struct Issue {
 
 /// Actor (user who performed an action).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Actor {
     /// Login name.
     pub login: String,
+    /// User ID (from User or Bot fragment).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Display name (from User fragment).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Whether this actor is a bot (derived from `__typename`).
+    #[serde(default)]
+    pub is_bot: Option<bool>,
+    /// GraphQL typename (`User`, `Bot`, `Organization`, etc.).
+    #[serde(rename = "__typename", default)]
+    pub typename: Option<String>,
 }
 
 /// Labels connection.
@@ -109,7 +122,7 @@ query IssueList($owner: String!, $name: String!, $first: Int!, $after: String, $
         number
         title
         state
-        author { login }
+        author { login ... on User { id name } ... on Bot { id } __typename }
         labels(first: 10) { nodes { name color } }
         assignees(first: 5) { nodes { login } }
         url
@@ -131,14 +144,16 @@ query IssueView($owner: String!, $name: String!, $number: Int!) {
       title
       body
       state
-      author { login }
-      labels(first: 20) { nodes { name color } }
-      assignees(first: 10) { nodes { login } }
+      author { login ... on User { id name } ... on Bot { id } __typename }
+      labels(first: 20) { nodes { name color description isDefault } }
+      assignees(first: 10) { nodes { login ... on User { id name } __typename } }
       url
       createdAt
       updatedAt
       closedAt
-      comments { totalCount }
+      comments(first: 100) { totalCount nodes { author { login ... on User { id name } ... on Bot { id } __typename } body createdAt url } }
+      milestone { title }
+      reactionGroups { content users { totalCount } }
     }
   }
 }

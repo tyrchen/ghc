@@ -82,14 +82,23 @@ impl ViewArgs {
             .await
             .context("failed to fetch issue")?;
 
-        let issue = data.pointer("/repository/issue").ok_or_else(|| {
-            anyhow::anyhow!("issue #{} not found in {}", self.number, repo.full_name())
-        })?;
+        let issue = data
+            .pointer("/repository/issue")
+            .filter(|v| !v.is_null())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Could not resolve to an issue or pull request with the number of {}",
+                    self.number,
+                )
+            })?;
 
         // JSON output with field filtering, jq, or template
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let mut issue_owned = issue.clone();
+            ghc_core::json::normalize_graphql_connections(&mut issue_owned);
+            ghc_core::json::normalize_author(&mut issue_owned);
             let output = ghc_core::json::format_json_output(
-                issue,
+                &issue_owned,
                 &self.json,
                 self.jq.as_deref(),
                 self.template.as_deref(),

@@ -193,10 +193,16 @@ impl ReposArgs {
             .await
             .context("failed to search repositories")?;
 
-        // JSON output
+        let items = result
+            .get("items")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("unexpected search response format"))?;
+
+        // JSON output - use items array, not the raw search response wrapper
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
+            let items_value = Value::Array(items.clone());
             let output = ghc_core::json::format_json_output(
-                &result,
+                &items_value,
                 &self.json,
                 self.jq.as_deref(),
                 self.template.as_deref(),
@@ -205,11 +211,6 @@ impl ReposArgs {
             ios_println!(ios, "{output}");
             return Ok(());
         }
-
-        let items = result
-            .get("items")
-            .and_then(Value::as_array)
-            .ok_or_else(|| anyhow::anyhow!("unexpected search response format"))?;
 
         if items.is_empty() {
             ios_eprintln!(ios, "No repositories matched your search");

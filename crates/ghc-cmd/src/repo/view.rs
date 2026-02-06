@@ -106,7 +106,13 @@ impl ViewArgs {
 
         let repo_data = data
             .get("repository")
-            .ok_or_else(|| anyhow::anyhow!("repository not found: {}", repo.full_name()))?;
+            .filter(|v| !v.is_null())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Could not resolve to a Repository with the name '{}'",
+                    repo.full_name(),
+                )
+            })?;
 
         let ios = &factory.io;
 

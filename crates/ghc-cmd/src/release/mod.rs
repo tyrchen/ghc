@@ -14,6 +14,7 @@ pub mod verify_asset;
 pub mod view;
 
 use clap::Subcommand;
+use serde_json::Value;
 
 /// Manage releases.
 #[derive(Debug, Subcommand)]
@@ -41,6 +42,32 @@ pub enum ReleaseCommand {
     VerifyAsset(verify_asset::VerifyAssetArgs),
     /// View a release.
     View(view::ViewArgs),
+}
+
+/// Normalize REST API release field names to match gh CLI conventions.
+///
+/// Maps: `draft` -> `isDraft`, `prerelease` -> `isPrerelease`,
+/// `tag_name` -> `tagName`, `published_at` -> `publishedAt`, etc.
+fn normalize_release_fields(release: &mut Value) {
+    if let Some(obj) = release.as_object_mut() {
+        let mappings: &[(&str, &str)] = &[
+            ("draft", "isDraft"),
+            ("prerelease", "isPrerelease"),
+            ("tag_name", "tagName"),
+            ("published_at", "publishedAt"),
+            ("html_url", "htmlUrl"),
+            ("created_at", "createdAt"),
+            ("target_commitish", "targetCommitish"),
+            ("upload_url", "uploadUrl"),
+            ("tarball_url", "tarballUrl"),
+            ("zipball_url", "zipballUrl"),
+        ];
+        for &(rest_name, gh_name) in mappings {
+            if let Some(val) = obj.get(rest_name).cloned() {
+                obj.insert(gh_name.to_string(), val);
+            }
+        }
+    }
 }
 
 impl ReleaseCommand {

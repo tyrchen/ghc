@@ -90,7 +90,7 @@ query PullRequestList($owner: String!, $name: String!, $first: Int!, $after: Str
         title
         state
         isDraft
-        author { login }
+        author { login ... on User { id name } ... on Bot { id } __typename }
         headRefName
         baseRefName
         labels(first: 10) { nodes { name color } }
@@ -118,21 +118,26 @@ query PullRequestView($owner: String!, $name: String!, $number: Int!) {
       body
       state
       isDraft
-      author { login }
+      author { login ... on User { id name } ... on Bot { id } __typename }
       headRefName
       baseRefName
-      labels(first: 20) { nodes { name color } }
+      labels(first: 20) { nodes { name color description isDefault } }
+      assignees(first: 10) { nodes { login ... on User { id name } __typename } }
       url
       createdAt
       updatedAt
       mergedAt
       closedAt
-      comments { totalCount }
+      comments(first: 100) { totalCount nodes { author { login ... on User { id name } ... on Bot { id } __typename } body createdAt url } }
       additions
       deletions
       changedFiles
       reviewDecision
       mergeable
+      reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login id name } ... on Team { name slug } } } }
+      reviews(first: 20) { nodes { author { login ... on User { id name } ... on Bot { id } __typename } state body createdAt } }
+      milestone { title }
+      reactionGroups { content users { totalCount } }
     }
   }
 }

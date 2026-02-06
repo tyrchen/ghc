@@ -156,7 +156,7 @@ async fn main() {
                 {
                     exit_codes::PENDING
                 } else {
-                    tracing::error!("{e:#}");
+                    eprintln!("{e:#}");
                     exit_codes::ERROR
                 }
             }

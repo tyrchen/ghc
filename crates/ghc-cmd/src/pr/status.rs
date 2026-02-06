@@ -16,7 +16,21 @@ use ghc_core::text;
 /// matching the Go CLI approach. The `pullRequests` connection on Repository
 /// does not accept an `author` argument.
 const PR_STATUS_QUERY: &str = r"
-query PullRequestStatus($viewerQuery: String!, $reviewerQuery: String!) {
+query PullRequestStatus($owner: String!, $name: String!, $headRefName: String!, $viewerQuery: String!, $reviewerQuery: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $headRefName, first: 1, states: [OPEN, CLOSED, MERGED], orderBy: {field: CREATED_AT, direction: DESC}) {
+      nodes {
+        number
+        title
+        state
+        headRefName
+        isDraft
+        reviewDecision
+        url
+        createdAt
+      }
+    }
+  }
   viewerCreated: search(query: $viewerQuery, type: ISSUE, first: 10) {
     nodes {
       ... on PullRequest {
@@ -86,12 +100,24 @@ impl StatusArgs {
             .await
             .context("failed to get authenticated user")?;
 
+        // Try to get the current git branch for the "Current branch" section
+        let head_ref_name = match factory.git_client() {
+            Ok(gc) => gc.current_branch().await.unwrap_or_default(),
+            Err(_) => String::new(),
+        };
+
         let full_name = format!("{}/{}", repo.owner(), repo.name());
         let viewer_query = format!("repo:{full_name} state:open is:pr author:{current_user}");
         let reviewer_query =
             format!("repo:{full_name} state:open is:pr review-requested:{current_user}");
 
         let mut variables = HashMap::new();
+        variables.insert("owner".to_string(), Value::String(repo.owner().to_string()));
+        variables.insert("name".to_string(), Value::String(repo.name().to_string()));
+        variables.insert(
+            "headRefName".to_string(),
+            Value::String(head_ref_name.clone()),
+        );
         variables.insert("viewerQuery".to_string(), Value::String(viewer_query));
         variables.insert("reviewerQuery".to_string(), Value::String(reviewer_query));
 
@@ -113,12 +139,66 @@ impl StatusArgs {
             return Ok(());
         }
 
+        // Current branch section
+        ios_println!(ios, "\n{}", cs.bold("Current branch"));
+        if head_ref_name.is_empty() {
+            ios_println!(ios, "  There is no current branch");
+        } else {
+            let current_branch_pr = data
+                .pointer("/repository/pullRequests/nodes")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first());
+
+            match current_branch_pr {
+                Some(pr) => {
+                    let number = pr.get("number").and_then(Value::as_i64).unwrap_or(0);
+                    let title = pr.get("title").and_then(Value::as_str).unwrap_or("");
+                    let state = pr.get("state").and_then(Value::as_str).unwrap_or("OPEN");
+                    let is_draft = pr.get("isDraft").and_then(Value::as_bool).unwrap_or(false);
+                    let review_decision = pr
+                        .get("reviewDecision")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+
+                    let status_icon = if is_draft {
+                        cs.gray("o")
+                    } else {
+                        match state {
+                            "MERGED" => cs.magenta("*"),
+                            "CLOSED" => cs.error("x"),
+                            _ => match review_decision {
+                                "APPROVED" => cs.success_icon(),
+                                "CHANGES_REQUESTED" => cs.warning_icon(),
+                                _ => cs.success("o"),
+                            },
+                        }
+                    };
+
+                    let mut tp = TablePrinter::new(ios);
+                    tp.add_row(vec![
+                        status_icon,
+                        cs.bold(&format!("#{number}")),
+                        text::truncate(title, 50),
+                        cs.gray(&head_ref_name),
+                    ]);
+                    ios_println!(ios, "{}", tp.render());
+                }
+                None => {
+                    ios_println!(
+                        ios,
+                        "  There is no pull request associated with {}",
+                        cs.bold(&format!("[{head_ref_name}]")),
+                    );
+                }
+            }
+        }
+
         // Created by you
         let created = data
             .pointer("/viewerCreated/nodes")
             .and_then(Value::as_array);
 
-        ios_println!(ios, "\n{}", cs.bold("Pull requests created by you"));
+        ios_println!(ios, "\n{}", cs.bold("Created by you"));
         match created {
             Some(prs) if !prs.is_empty() => {
                 let mut tp = TablePrinter::new(ios);
@@ -161,7 +241,7 @@ impl StatusArgs {
             .pointer("/reviewRequested/nodes")
             .and_then(Value::as_array);
 
-        ios_println!(ios, "\n{}", cs.bold("Pull requests requesting your review"));
+        ios_println!(ios, "\n{}", cs.bold("Requesting a code review from you"));
         match review_requested {
             Some(prs) if !prs.is_empty() => {
                 let mut tp = TablePrinter::new(ios);
@@ -213,12 +293,17 @@ mod tests {
         )
         .await;
 
-        // Mock the PR status query (uses search API)
+        // Mock the PR status query (uses search API + repository for current branch)
         mock_graphql(
             &h.server,
             "PullRequestStatus",
             serde_json::json!({
                 "data": {
+                    "repository": {
+                        "pullRequests": {
+                            "nodes": []
+                        }
+                    },
                     "viewerCreated": {
                         "nodes": [{
                             "number": 50,
@@ -256,12 +341,16 @@ mod tests {
         args.run(&h.factory).await.unwrap();
         let out = h.stdout();
         assert!(
-            out.contains("created by you"),
+            out.contains("Current branch"),
+            "should show current branch section: {out}"
+        );
+        assert!(
+            out.contains("Created by you"),
             "should show created section: {out}"
         );
         assert!(out.contains("#50"), "should contain created PR: {out}");
         assert!(
-            out.contains("requesting your review"),
+            out.contains("Requesting a code review from you"),
             "should show review section: {out}",
         );
         assert!(out.contains("#51"), "should contain review PR: {out}");
@@ -285,6 +374,9 @@ mod tests {
             "PullRequestStatus",
             serde_json::json!({
                 "data": {
+                    "repository": {
+                        "pullRequests": { "nodes": [] }
+                    },
                     "viewerCreated": { "nodes": [] },
                     "reviewRequested": { "nodes": [] }
                 }

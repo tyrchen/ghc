@@ -83,10 +83,14 @@ impl ViewArgs {
             )
         };
 
-        let release: Value = client
+        let mut release: Value = client
             .rest(reqwest::Method::GET, &path, None)
             .await
             .context("failed to fetch release")?;
+
+        // Normalize REST field names to match gh CLI conventions
+        // (gh uses isDraft/isPrerelease/tagName/publishedAt/createdAt)
+        super::normalize_release_fields(&mut release);
 
         // JSON output
         let ios = &factory.io;
@@ -106,24 +110,29 @@ impl ViewArgs {
 
         let title = release.get("name").and_then(Value::as_str).unwrap_or("");
         let tag_name = release
-            .get("tag_name")
+            .get("tagName")
+            .or_else(|| release.get("tag_name"))
             .and_then(Value::as_str)
             .unwrap_or("");
         let body = release.get("body").and_then(Value::as_str).unwrap_or("");
         let is_draft = release
-            .get("draft")
+            .get("isDraft")
+            .or_else(|| release.get("draft"))
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let is_prerelease = release
-            .get("prerelease")
+            .get("isPrerelease")
+            .or_else(|| release.get("prerelease"))
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let published_at = release
-            .get("published_at")
+            .get("publishedAt")
+            .or_else(|| release.get("published_at"))
             .and_then(Value::as_str)
             .unwrap_or("");
         let html_url = release
-            .get("html_url")
+            .get("htmlUrl")
+            .or_else(|| release.get("html_url"))
             .and_then(Value::as_str)
             .unwrap_or("");
 

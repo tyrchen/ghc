@@ -81,12 +81,11 @@ impl StatusArgs {
                   }
                 }
               }
-              recent: repository(owner: $owner, name: $name) {
-                issues(first: 25, states: [OPEN], orderBy: {field: CREATED_AT, direction: DESC}) {
+              authored: repository(owner: $owner, name: $name) {
+                issues(first: 25, states: [OPEN], filterBy: {createdBy: $assignee}, orderBy: {field: CREATED_AT, direction: DESC}) {
                   nodes {
                     number
                     title
-                    author { login }
                     url
                     createdAt
                   }
@@ -124,11 +123,7 @@ impl StatusArgs {
             .pointer("/assigned/issues/nodes")
             .and_then(Value::as_array);
 
-        ios_println!(
-            ios,
-            "{}",
-            cs.bold(&format!("Issues assigned to you in {}", repo.full_name())),
-        );
+        ios_println!(ios, "{}", cs.bold("Issues assigned to you"),);
 
         if let Some(issues) = assigned_issues {
             if issues.is_empty() {
@@ -173,14 +168,14 @@ impl StatusArgs {
 
         ios_println!(ios);
 
-        // Recently opened issues
-        let recent_issues = data
-            .pointer("/recent/issues/nodes")
+        // Issues opened by you
+        let authored_issues = data
+            .pointer("/authored/issues/nodes")
             .and_then(Value::as_array);
 
-        ios_println!(ios, "{}", cs.bold("Recently opened issues"));
+        ios_println!(ios, "{}", cs.bold("Issues opened by you"));
 
-        if let Some(issues) = recent_issues {
+        if let Some(issues) = authored_issues {
             if issues.is_empty() {
                 ios_println!(ios, "  {}", cs.gray("Nothing here"));
             } else {
@@ -188,15 +183,7 @@ impl StatusArgs {
                 for issue in issues {
                     let number = issue.get("number").and_then(Value::as_i64).unwrap_or(0);
                     let title = issue.get("title").and_then(Value::as_str).unwrap_or("");
-                    let author = issue
-                        .pointer("/author/login")
-                        .and_then(Value::as_str)
-                        .unwrap_or("ghost");
-                    tp.add_row(vec![
-                        format!("  #{number}"),
-                        text::truncate(title, 50),
-                        cs.gray(author),
-                    ]);
+                    tp.add_row(vec![format!("  #{number}"), text::truncate(title, 60)]);
                 }
                 ios_println!(ios, "{}", tp.render());
             }
@@ -230,10 +217,10 @@ mod tests {
                         ]
                     }
                 },
-                "recent": {
+                "authored": {
                     "issues": {
                         "nodes": [
-                            { "number": 3, "title": "Recent Issue", "author": { "login": "alice" }, "url": "https://github.com/owner/repo/issues/3", "createdAt": "2024-01-15T10:00:00Z" }
+                            { "number": 3, "title": "My Authored Issue", "url": "https://github.com/owner/repo/issues/3", "createdAt": "2024-01-15T10:00:00Z" }
                         ]
                     }
                 }
@@ -272,7 +259,10 @@ mod tests {
             out.contains("Mentioned Issue"),
             "should contain mentioned issue"
         );
-        assert!(out.contains("Recent Issue"), "should contain recent issue");
+        assert!(
+            out.contains("My Authored Issue"),
+            "should contain authored issue"
+        );
     }
 
     #[tokio::test]

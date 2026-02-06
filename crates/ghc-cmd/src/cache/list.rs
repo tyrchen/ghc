@@ -80,10 +80,16 @@ impl ListArgs {
             .await
             .context("failed to list caches")?;
 
+        // Extract inner array from wrapper object
+        let items = result
+            .get("actions_caches")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
+
         // JSON output
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
             let output = ghc_core::json::format_json_output(
-                &result,
+                &items,
                 &self.json,
                 self.jq.as_deref(),
                 self.template.as_deref(),
@@ -93,9 +99,8 @@ impl ListArgs {
             return Ok(());
         }
 
-        let caches = result
-            .get("actions_caches")
-            .and_then(Value::as_array)
+        let caches = items
+            .as_array()
             .ok_or_else(|| anyhow::anyhow!("unexpected response format"))?;
 
         if caches.is_empty() {

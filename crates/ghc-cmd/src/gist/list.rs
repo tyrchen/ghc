@@ -56,14 +56,7 @@ impl ListArgs {
             .await
             .context("failed to list gists")?;
 
-        if gists.is_empty() {
-            if ios.is_stdout_tty() {
-                ios_eprintln!(ios, "No gists found");
-            }
-            return Ok(());
-        }
-
-        // JSON output
+        // JSON output - always produces output (even [] for empty results)
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
             let items = Value::Array(gists.clone());
             let output = ghc_core::json::format_json_output(
@@ -74,6 +67,13 @@ impl ListArgs {
             )
             .context("failed to format JSON output")?;
             ios_println!(ios, "{output}");
+            return Ok(());
+        }
+
+        if gists.is_empty() {
+            if ios.is_stdout_tty() {
+                ios_eprintln!(ios, "No gists found");
+            }
             return Ok(());
         }
 
@@ -122,7 +122,11 @@ impl ListArgs {
             };
 
             let desc = if description.is_empty() {
-                cs.gray("(no description)")
+                // When no description, show the first filename (matches gh behavior)
+                let first_file = files
+                    .and_then(|f| f.keys().next())
+                    .map_or("(no description)", String::as_str);
+                text::truncate(first_file, 60)
             } else {
                 text::truncate(description, 60)
             };
