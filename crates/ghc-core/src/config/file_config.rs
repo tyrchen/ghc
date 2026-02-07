@@ -261,21 +261,25 @@ impl AuthConfig for FileConfig {
             return Some((token, "GITHUB_TOKEN".to_string()));
         }
 
-        // Check keyring per-user slot for the active user
-        if let Some(ref active_user) = self.hosts.get(hostname).and_then(|h| h.user.clone())
+        let host = self.hosts.get(hostname)?;
+
+        // If oauth_token is present in config, use it directly (no keyring needed)
+        if let Some(ref token) = host.oauth_token {
+            return Some((token.clone(), "config".to_string()));
+        }
+
+        // oauth_token is absent — token was stored in keyring during secure login.
+        // Try per-user slot first, then active slot.
+        if let Some(ref active_user) = host.user
             && let Ok(Some(token)) = crate::keyring_store::get_token_for_user(hostname, active_user)
         {
             return Some((token, "keyring".to_string()));
         }
-
-        // Check keyring active slot (fallback)
         if let Ok(Some(token)) = crate::keyring_store::get_token(hostname) {
             return Some((token, "keyring".to_string()));
         }
 
-        let host = self.hosts.get(hostname)?;
-        let token = host.oauth_token.as_ref()?;
-        Some((token.clone(), "config".to_string()))
+        None
     }
 
     fn active_user(&self, hostname: &str) -> Option<String> {
@@ -330,24 +334,22 @@ impl AuthConfig for FileConfig {
     }
 
     fn switch_user(&mut self, hostname: &str, username: &str) -> anyhow::Result<()> {
-        // Try to get the new user's token from keyring first, then config
-        let new_token_from_keyring = crate::keyring_store::get_token_for_user(hostname, username)
-            .ok()
-            .flatten();
-
         let host = self
             .hosts
             .get_mut(hostname)
             .ok_or_else(|| anyhow::anyhow!("not logged into {hostname}"))?;
 
-        let new_token = if let Some(ref token) = new_token_from_keyring {
-            token.clone()
-        } else {
-            host.users
-                .get(username)
-                .and_then(|e| e.oauth_token.clone())
-                .ok_or_else(|| anyhow::anyhow!("user {username} not found for {hostname}"))?
-        };
+        // Try config first; only fall back to keyring if token is absent
+        let new_token =
+            if let Some(token) = host.users.get(username).and_then(|e| e.oauth_token.clone()) {
+                token
+            } else {
+                // Token not in config — check keyring (secure storage was used)
+                crate::keyring_store::get_token_for_user(hostname, username)
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| anyhow::anyhow!("user {username} not found for {hostname}"))?
+            };
 
         // Save current user's token
         let current_user = host.user.clone().unwrap_or_default();
@@ -357,11 +359,21 @@ impl AuthConfig for FileConfig {
             host.users.entry(current_user).or_default().oauth_token = Some(current_token);
         }
 
-        host.oauth_token = Some(new_token.clone());
-        host.user = Some(username.to_string());
+        // Determine if new token came from keyring (no oauth_token in config for this user)
+        let from_keyring = host
+            .users
+            .get(username)
+            .and_then(|e| e.oauth_token.as_ref())
+            .is_none();
 
-        // Update keyring active slot with the new user's token
-        let _ = crate::keyring_store::store_token(hostname, &new_token);
+        host.oauth_token = if from_keyring {
+            // Keep token out of config; update keyring active slot instead
+            let _ = crate::keyring_store::store_token(hostname, &new_token);
+            None
+        } else {
+            Some(new_token)
+        };
+        host.user = Some(username.to_string());
 
         self.write()
     }
@@ -381,25 +393,35 @@ impl AuthConfig for FileConfig {
     }
 
     fn token_for_user(&self, hostname: &str, username: &str) -> Option<(String, String)> {
-        // Check keyring per-user slot first
-        if let Ok(Some(token)) = crate::keyring_store::get_token_for_user(hostname, username) {
-            return Some((token, "keyring".to_string()));
-        }
-
         let host = self.hosts.get(hostname)?;
+
         // Check if it's the active user
         if host.user.as_deref() == Some(username) {
-            // Check keyring active slot
+            // If token is in config, use it directly
+            if let Some(ref token) = host.oauth_token {
+                return Some((token.clone(), "config".to_string()));
+            }
+            // Token absent from config — check keyring (secure storage was used)
+            if let Ok(Some(token)) = crate::keyring_store::get_token_for_user(hostname, username) {
+                return Some((token, "keyring".to_string()));
+            }
             if let Ok(Some(token)) = crate::keyring_store::get_token(hostname) {
                 return Some((token, "keyring".to_string()));
             }
-            let token = host.oauth_token.as_ref()?;
+            return None;
+        }
+
+        // Non-active user: check users map first
+        if let Some(entry) = host.users.get(username)
+            && let Some(ref token) = entry.oauth_token
+        {
             return Some((token.clone(), "config".to_string()));
         }
-        // Check the users map
-        let entry = host.users.get(username)?;
-        let token = entry.oauth_token.as_ref()?;
-        Some((token.clone(), "config".to_string()))
+        // Token absent from config — check keyring per-user slot
+        if let Ok(Some(token)) = crate::keyring_store::get_token_for_user(hostname, username) {
+            return Some((token, "keyring".to_string()));
+        }
+        None
     }
 }
 
