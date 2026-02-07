@@ -228,10 +228,10 @@ mod tests {
     async fn test_should_auto_switch_on_logout_of_active_user() {
         let mut config = MemoryConfig::new();
         config
-            .login("github.com", "user1", "token1", "https")
+            .login("github.com", "user1", "token1", "https", false)
             .unwrap();
         config
-            .login("github.com", "user2", "token2", "https")
+            .login("github.com", "user2", "token2", "https", false)
             .unwrap();
         // user2 is active since it was logged in last
         let h = TestHarness::with_config(config).await;

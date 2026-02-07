@@ -138,6 +138,7 @@ impl AuthConfig for MemoryConfig {
         username: &str,
         token: &str,
         git_protocol: &str,
+        _secure_storage: bool,
     ) -> anyhow::Result<()> {
         let entry = self
             .auth
@@ -385,7 +386,7 @@ mod tests {
     #[test]
     fn test_should_login_and_retrieve_credentials() {
         let mut cfg = MemoryConfig::new();
-        cfg.login("github.com", "testuser", "ghp_test", "https")
+        cfg.login("github.com", "testuser", "ghp_test", "https", false)
             .unwrap();
 
         let auth = cfg.authentication();
@@ -398,7 +399,8 @@ mod tests {
     #[test]
     fn test_should_set_git_protocol_on_login() {
         let mut cfg = MemoryConfig::new();
-        cfg.login("github.com", "user", "token", "ssh").unwrap();
+        cfg.login("github.com", "user", "token", "ssh", false)
+            .unwrap();
         assert_eq!(
             cfg.get("github.com", "git_protocol"),
             Some("ssh".to_string()),
@@ -408,14 +410,15 @@ mod tests {
     #[test]
     fn test_should_not_set_git_protocol_when_empty_on_login() {
         let mut cfg = MemoryConfig::new();
-        cfg.login("github.com", "user", "token", "").unwrap();
+        cfg.login("github.com", "user", "token", "", false).unwrap();
         assert!(cfg.get("github.com", "git_protocol").is_none());
     }
 
     #[test]
     fn test_should_logout_single_user_removes_host() {
         let mut cfg = MemoryConfig::new();
-        cfg.login("github.com", "user1", "token1", "https").unwrap();
+        cfg.login("github.com", "user1", "token1", "https", false)
+            .unwrap();
         cfg.logout("github.com", "user1").unwrap();
 
         assert!(cfg.active_token("github.com").is_none());
@@ -425,8 +428,10 @@ mod tests {
     #[test]
     fn test_should_logout_one_user_keeps_others() {
         let mut cfg = MemoryConfig::new();
-        cfg.login("github.com", "user1", "token1", "https").unwrap();
-        cfg.login("github.com", "user2", "token2", "").unwrap();
+        cfg.login("github.com", "user1", "token1", "https", false)
+            .unwrap();
+        cfg.login("github.com", "user2", "token2", "", false)
+            .unwrap();
         cfg.logout("github.com", "user1").unwrap();
 
         // Host still exists with user2
@@ -438,8 +443,10 @@ mod tests {
     #[test]
     fn test_should_switch_user() {
         let mut cfg = MemoryConfig::new();
-        cfg.login("github.com", "user1", "token1", "https").unwrap();
-        cfg.login("github.com", "user2", "token2", "").unwrap();
+        cfg.login("github.com", "user1", "token1", "https", false)
+            .unwrap();
+        cfg.login("github.com", "user2", "token2", "", false)
+            .unwrap();
         assert_eq!(cfg.active_user("github.com"), Some("user2".to_string()));
 
         cfg.switch_user("github.com", "user1").unwrap();
@@ -451,7 +458,8 @@ mod tests {
     #[test]
     fn test_should_error_switching_to_unknown_user() {
         let mut cfg = MemoryConfig::new();
-        cfg.login("github.com", "user1", "token1", "https").unwrap();
+        cfg.login("github.com", "user1", "token1", "https", false)
+            .unwrap();
         let result = cfg.switch_user("github.com", "ghost");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
@@ -506,7 +514,9 @@ mod tests {
         assert_eq!(auth.active_user("github.com"), Some("user".to_string()));
 
         let auth_mut: &mut dyn AuthConfig = cfg.authentication_mut();
-        auth_mut.login("ghe.io", "user2", "token2", "ssh").unwrap();
+        auth_mut
+            .login("ghe.io", "user2", "token2", "ssh", false)
+            .unwrap();
         assert_eq!(
             cfg.authentication().active_user("ghe.io"),
             Some("user2".to_string()),
@@ -518,8 +528,10 @@ mod tests {
     #[test]
     fn test_should_return_users_for_host() {
         let mut cfg = MemoryConfig::new();
-        cfg.login("github.com", "user1", "token1", "https").unwrap();
-        cfg.login("github.com", "user2", "token2", "https").unwrap();
+        cfg.login("github.com", "user1", "token1", "https", false)
+            .unwrap();
+        cfg.login("github.com", "user2", "token2", "https", false)
+            .unwrap();
         let users = cfg.users_for_host("github.com");
         assert_eq!(users.len(), 2);
         assert!(users.contains(&"user1".to_string()));
@@ -537,8 +549,10 @@ mod tests {
     #[test]
     fn test_should_return_token_for_specific_user() {
         let mut cfg = MemoryConfig::new();
-        cfg.login("github.com", "user1", "token1", "https").unwrap();
-        cfg.login("github.com", "user2", "token2", "https").unwrap();
+        cfg.login("github.com", "user1", "token1", "https", false)
+            .unwrap();
+        cfg.login("github.com", "user2", "token2", "https", false)
+            .unwrap();
         let (token, source) = cfg.token_for_user("github.com", "user1").unwrap();
         assert_eq!(token, "token1");
         assert_eq!(source, "config");

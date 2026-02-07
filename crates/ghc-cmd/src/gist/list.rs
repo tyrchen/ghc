@@ -135,7 +135,8 @@ impl ListArgs {
                 cs.bold(id),
                 desc,
                 visibility,
-                format!("{file_count} file(s)"),
+                #[allow(clippy::cast_possible_wrap)]
+                text::pluralize(file_count as i64, "file", "files"),
                 updated_at.to_string(),
             ]);
         }

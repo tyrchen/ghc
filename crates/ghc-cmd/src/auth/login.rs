@@ -145,8 +145,14 @@ impl LoginArgs {
             .lock()
             .map_err(|e| anyhow::anyhow!("config lock: {e}"))?;
         let git_protocol = self.git_protocol.as_deref().unwrap_or("");
-        cfg.authentication_mut()
-            .login(hostname, &username, &token, git_protocol)?;
+        let secure_storage = !self.insecure_storage;
+        cfg.authentication_mut().login(
+            hostname,
+            &username,
+            &token,
+            git_protocol,
+            secure_storage,
+        )?;
 
         info!(hostname, username, "Logged in with token");
         ios_eprintln!(ios, "Logged in as {username}");
@@ -276,8 +282,14 @@ impl LoginArgs {
         let mut cfg = cfg_lock
             .lock()
             .map_err(|e| anyhow::anyhow!("config lock: {e}"))?;
-        cfg.authentication_mut()
-            .login(hostname, &username, &token, &git_protocol)?;
+        let secure_storage = !self.insecure_storage;
+        cfg.authentication_mut().login(
+            hostname,
+            &username,
+            &token,
+            &git_protocol,
+            secure_storage,
+        )?;
 
         ios_eprintln!(ios, "Logged in as {username}");
         Ok(())

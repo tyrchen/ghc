@@ -189,10 +189,10 @@ mod tests {
     fn two_user_config() -> MemoryConfig {
         let mut config = MemoryConfig::new();
         config
-            .login("github.com", "user1", "token1", "https")
+            .login("github.com", "user1", "token1", "https", false)
             .unwrap();
         config
-            .login("github.com", "user2", "token2", "https")
+            .login("github.com", "user2", "token2", "https", false)
             .unwrap();
         config
     }

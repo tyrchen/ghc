@@ -208,12 +208,17 @@ impl ListArgs {
                 labels.join(", ")
             };
 
+            let time_display = chrono::DateTime::parse_from_rfc3339(created_at).map_or_else(
+                |_| created_at.to_string(),
+                |dt| text::relative_time_str(&dt.into(), ios.is_stdout_tty()),
+            );
+
             tp.add_row(vec![
                 format!("#{number}"),
                 text::truncate(title, 60),
                 label_display,
                 state_display,
-                created_at.to_string(),
+                time_display,
             ]);
         }
 

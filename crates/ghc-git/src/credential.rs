@@ -132,6 +132,7 @@ mod tests {
             _username: &str,
             _token: &str,
             _git_protocol: &str,
+            _secure_storage: bool,
         ) -> anyhow::Result<()> {
             Ok(())
         }

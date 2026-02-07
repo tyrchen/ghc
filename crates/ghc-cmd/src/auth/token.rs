@@ -130,10 +130,10 @@ mod tests {
     async fn test_should_print_token_for_specific_user() {
         let mut config = MemoryConfig::new();
         config
-            .login("github.com", "user1", "ghp_token_user1", "https")
+            .login("github.com", "user1", "ghp_token_user1", "https", false)
             .unwrap();
         config
-            .login("github.com", "user2", "ghp_token_user2", "https")
+            .login("github.com", "user2", "ghp_token_user2", "https", false)
             .unwrap();
         let h = TestHarness::with_config(config).await;
 

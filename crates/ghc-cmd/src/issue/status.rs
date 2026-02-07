@@ -127,7 +127,7 @@ impl StatusArgs {
 
         if let Some(issues) = assigned_issues {
             if issues.is_empty() {
-                ios_println!(ios, "  {}", cs.gray("Nothing here"));
+                ios_println!(ios, "  {}", cs.gray("No issues match"));
             } else {
                 let mut tp = TablePrinter::new(ios);
                 for issue in issues {
@@ -138,7 +138,7 @@ impl StatusArgs {
                 ios_println!(ios, "{}", tp.render());
             }
         } else {
-            ios_println!(ios, "  {}", cs.gray("Nothing here"));
+            ios_println!(ios, "  {}", cs.gray("No issues match"));
         }
 
         ios_println!(ios);
@@ -152,7 +152,7 @@ impl StatusArgs {
 
         if let Some(issues) = mentioned_issues {
             if issues.is_empty() {
-                ios_println!(ios, "  {}", cs.gray("Nothing here"));
+                ios_println!(ios, "  {}", cs.gray("No issues match"));
             } else {
                 let mut tp = TablePrinter::new(ios);
                 for issue in issues {
@@ -163,7 +163,7 @@ impl StatusArgs {
                 ios_println!(ios, "{}", tp.render());
             }
         } else {
-            ios_println!(ios, "  {}", cs.gray("Nothing here"));
+            ios_println!(ios, "  {}", cs.gray("No issues match"));
         }
 
         ios_println!(ios);
@@ -177,7 +177,7 @@ impl StatusArgs {
 
         if let Some(issues) = authored_issues {
             if issues.is_empty() {
-                ios_println!(ios, "  {}", cs.gray("Nothing here"));
+                ios_println!(ios, "  {}", cs.gray("No issues match"));
             } else {
                 let mut tp = TablePrinter::new(ios);
                 for issue in issues {
@@ -188,7 +188,7 @@ impl StatusArgs {
                 ios_println!(ios, "{}", tp.render());
             }
         } else {
-            ios_println!(ios, "  {}", cs.gray("Nothing here"));
+            ios_println!(ios, "  {}", cs.gray("No issues match"));
         }
 
         Ok(())

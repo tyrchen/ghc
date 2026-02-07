@@ -122,6 +122,11 @@ pub trait AuthConfig: Send + Sync + std::fmt::Debug {
 
     /// Store authentication credentials.
     ///
+    /// When `secure_storage` is `true`, the implementation should attempt to
+    /// store the token in the OS keyring first, falling back to the config
+    /// file if the keyring is unavailable. When `false`, the token is stored
+    /// only in the config file.
+    ///
     /// # Errors
     ///
     /// Returns an error if credentials cannot be stored.
@@ -131,6 +136,7 @@ pub trait AuthConfig: Send + Sync + std::fmt::Debug {
         username: &str,
         token: &str,
         git_protocol: &str,
+        secure_storage: bool,
     ) -> anyhow::Result<()>;
 
     /// Remove authentication credentials.

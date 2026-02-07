@@ -55,10 +55,17 @@ impl ListArgs {
             self.limit.min(100),
         );
 
-        let labels: Vec<Value> = client
+        let mut labels: Vec<Value> = client
             .rest(reqwest::Method::GET, &path, None)
             .await
             .context("failed to list labels")?;
+
+        // Sort labels alphabetically by name (matches gh CLI behavior)
+        labels.sort_by(|a, b| {
+            let a_name = a.get("name").and_then(Value::as_str).unwrap_or("");
+            let b_name = b.get("name").and_then(Value::as_str).unwrap_or("");
+            a_name.cmp(b_name)
+        });
 
         // JSON output
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {

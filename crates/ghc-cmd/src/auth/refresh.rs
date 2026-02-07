@@ -190,7 +190,6 @@ impl RefreshArgs {
     }
 
     /// Verify the authenticated user and store new credentials.
-    #[allow(clippy::unused_self)]
     fn verify_and_store(
         &self,
         factory: &Factory,
@@ -213,8 +212,14 @@ impl RefreshArgs {
             );
         }
 
-        cfg.authentication_mut()
-            .login(hostname, &result.username, &result.token, "")?;
+        let secure_storage = !self.insecure_storage;
+        cfg.authentication_mut().login(
+            hostname,
+            &result.username,
+            &result.token,
+            "",
+            secure_storage,
+        )?;
         Ok(())
     }
 }
@@ -387,6 +392,7 @@ mod tests {
             _username: &str,
             _token: &str,
             _git_protocol: &str,
+            _secure_storage: bool,
         ) -> anyhow::Result<()> {
             Ok(())
         }

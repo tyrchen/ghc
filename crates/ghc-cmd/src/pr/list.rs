@@ -203,13 +203,18 @@ impl ListArgs {
                 }
             };
 
+            let time_display = chrono::DateTime::parse_from_rfc3339(created_at).map_or_else(
+                |_| created_at.to_string(),
+                |dt| text::relative_time_str(&dt.into(), ios.is_stdout_tty()),
+            );
+
             tp.add_row(vec![
                 cs.bold(&format!("#{number}")),
                 text::truncate(title, 60),
                 head_ref.to_string(),
                 state_display,
                 author.to_string(),
-                created_at.to_string(),
+                time_display,
             ]);
         }
 

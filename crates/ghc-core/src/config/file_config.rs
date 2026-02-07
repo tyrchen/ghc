@@ -261,7 +261,14 @@ impl AuthConfig for FileConfig {
             return Some((token, "GITHUB_TOKEN".to_string()));
         }
 
-        // Check keyring before config file (matches gh CLI behavior)
+        // Check keyring per-user slot for the active user
+        if let Some(ref active_user) = self.hosts.get(hostname).and_then(|h| h.user.clone())
+            && let Ok(Some(token)) = crate::keyring_store::get_token_for_user(hostname, active_user)
+        {
+            return Some((token, "keyring".to_string()));
+        }
+
+        // Check keyring active slot (fallback)
         if let Ok(Some(token)) = crate::keyring_store::get_token(hostname) {
             return Some((token, "keyring".to_string()));
         }
@@ -285,33 +292,62 @@ impl AuthConfig for FileConfig {
         username: &str,
         token: &str,
         git_protocol: &str,
+        secure_storage: bool,
     ) -> anyhow::Result<()> {
         let host = self.hosts.entry(hostname.to_string()).or_default();
-        host.oauth_token = Some(token.to_string());
         host.user = Some(username.to_string());
         if !git_protocol.is_empty() {
             host.git_protocol = Some(git_protocol.to_string());
         }
+
+        if secure_storage {
+            // Try keyring first; on success, omit token from config file
+            let keyring_ok = crate::keyring_store::store_token_for_user(hostname, username, token)
+                .is_ok()
+                && crate::keyring_store::store_token(hostname, token).is_ok();
+
+            if keyring_ok {
+                // Token is in keyring — do not persist to config file
+                host.oauth_token = None;
+            } else {
+                // Keyring unavailable — fall back to config file
+                host.oauth_token = Some(token.to_string());
+            }
+        } else {
+            host.oauth_token = Some(token.to_string());
+        }
+
         self.write()
     }
 
-    fn logout(&mut self, hostname: &str, _username: &str) -> anyhow::Result<()> {
+    fn logout(&mut self, hostname: &str, username: &str) -> anyhow::Result<()> {
+        // Clean up keyring entries (ignore errors — keyring may not be available)
+        let _ = crate::keyring_store::delete_token_for_user(hostname, username);
+        let _ = crate::keyring_store::delete_token(hostname);
+
         self.hosts.remove(hostname);
         self.write()
     }
 
     fn switch_user(&mut self, hostname: &str, username: &str) -> anyhow::Result<()> {
+        // Try to get the new user's token from keyring first, then config
+        let new_token_from_keyring = crate::keyring_store::get_token_for_user(hostname, username)
+            .ok()
+            .flatten();
+
         let host = self
             .hosts
             .get_mut(hostname)
             .ok_or_else(|| anyhow::anyhow!("not logged into {hostname}"))?;
 
-        // Check if user exists in the users map and swap tokens
-        let new_token = host
-            .users
-            .get(username)
-            .and_then(|e| e.oauth_token.clone())
-            .ok_or_else(|| anyhow::anyhow!("user {username} not found for {hostname}"))?;
+        let new_token = if let Some(ref token) = new_token_from_keyring {
+            token.clone()
+        } else {
+            host.users
+                .get(username)
+                .and_then(|e| e.oauth_token.clone())
+                .ok_or_else(|| anyhow::anyhow!("user {username} not found for {hostname}"))?
+        };
 
         // Save current user's token
         let current_user = host.user.clone().unwrap_or_default();
@@ -321,8 +357,11 @@ impl AuthConfig for FileConfig {
             host.users.entry(current_user).or_default().oauth_token = Some(current_token);
         }
 
-        host.oauth_token = Some(new_token);
+        host.oauth_token = Some(new_token.clone());
         host.user = Some(username.to_string());
+
+        // Update keyring active slot with the new user's token
+        let _ = crate::keyring_store::store_token(hostname, &new_token);
 
         self.write()
     }
@@ -342,10 +381,15 @@ impl AuthConfig for FileConfig {
     }
 
     fn token_for_user(&self, hostname: &str, username: &str) -> Option<(String, String)> {
+        // Check keyring per-user slot first
+        if let Ok(Some(token)) = crate::keyring_store::get_token_for_user(hostname, username) {
+            return Some((token, "keyring".to_string()));
+        }
+
         let host = self.hosts.get(hostname)?;
-        // Check if it's the active user first
+        // Check if it's the active user
         if host.user.as_deref() == Some(username) {
-            // Check keyring first (matches gh CLI behavior)
+            // Check keyring active slot
             if let Ok(Some(token)) = crate::keyring_store::get_token(hostname) {
                 return Some((token, "keyring".to_string()));
             }
@@ -497,7 +541,7 @@ mod tests {
     #[test]
     fn test_should_login_and_get_token() {
         let mut cfg = FileConfig::empty();
-        cfg.login("github.com", "testuser", "ghp_test123", "https")
+        cfg.login("github.com", "testuser", "ghp_test123", "https", false)
             .unwrap();
 
         let auth = cfg.authentication();
@@ -518,7 +562,8 @@ mod tests {
     #[test]
     fn test_should_logout_and_remove_host() {
         let mut cfg = FileConfig::empty();
-        cfg.login("github.com", "user", "token", "https").unwrap();
+        cfg.login("github.com", "user", "token", "https", false)
+            .unwrap();
         assert!(!AuthConfig::hosts(&cfg).is_empty());
 
         cfg.logout("github.com", "user").unwrap();
@@ -529,7 +574,8 @@ mod tests {
     #[test]
     fn test_should_login_sets_git_protocol() {
         let mut cfg = FileConfig::empty();
-        cfg.login("github.com", "user", "token", "ssh").unwrap();
+        cfg.login("github.com", "user", "token", "ssh", false)
+            .unwrap();
         assert_eq!(
             cfg.get("github.com", "git_protocol"),
             Some("ssh".to_string()),
@@ -539,15 +585,17 @@ mod tests {
     #[test]
     fn test_should_not_set_git_protocol_when_empty() {
         let mut cfg = FileConfig::empty();
-        cfg.login("github.com", "user", "token", "").unwrap();
+        cfg.login("github.com", "user", "token", "", false).unwrap();
         assert!(cfg.get("github.com", "git_protocol").is_none());
     }
 
     #[test]
     fn test_should_list_hosts_after_login() {
         let mut cfg = FileConfig::empty();
-        cfg.login("github.com", "user1", "token1", "https").unwrap();
-        cfg.login("ghe.io", "user2", "token2", "ssh").unwrap();
+        cfg.login("github.com", "user1", "token1", "https", false)
+            .unwrap();
+        cfg.login("ghe.io", "user2", "token2", "ssh", false)
+            .unwrap();
 
         let hosts = Config::hosts(&cfg);
         assert_eq!(hosts.len(), 2);

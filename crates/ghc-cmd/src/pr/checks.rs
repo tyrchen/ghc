@@ -152,13 +152,11 @@ impl ChecksArgs {
             .and_then(Value::as_array);
 
         let Some(contexts) = contexts else {
-            ios_eprintln!(ios, "No status checks found for PR #{}", self.number);
-            return Ok((true, false));
+            anyhow::bail!("no checks reported on the PR");
         };
 
         if contexts.is_empty() {
-            ios_eprintln!(ios, "No status checks found for PR #{}", self.number);
-            return Ok((true, false));
+            anyhow::bail!("no checks reported on the PR");
         }
 
         // JSON output
@@ -333,7 +331,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_should_display_no_checks_found() {
+    async fn test_should_error_when_no_checks_found() {
         let h = TestHarness::new().await;
         mock_graphql(
             &h.server,
@@ -354,11 +352,14 @@ mod tests {
             template: None,
         };
 
-        args.run(&h.factory).await.unwrap();
-        let err = h.stderr();
+        let result = args.run(&h.factory).await;
+        assert!(result.is_err());
         assert!(
-            err.contains("No status checks"),
-            "should report no checks: {err}",
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no checks reported"),
+            "should report no checks",
         );
     }
 
