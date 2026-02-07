@@ -178,23 +178,26 @@ impl ListArgs {
             let created_at = run.get("created_at").and_then(Value::as_str).unwrap_or("");
             let updated_at = run.get("updated_at").and_then(Value::as_str).unwrap_or("");
 
-            let (symbol, conclusion_display) = match (status, conclusion) {
-                (_, "success") => (cs.success("\u{2713}"), cs.success("success")),
-                (_, "failure") => (cs.error("X"), cs.error("failure")),
-                (_, "cancelled") => (cs.gray("-"), cs.gray("cancelled")),
-                (_, "skipped") => (cs.gray("-"), cs.gray("skipped")),
-                (_, "neutral") => (cs.gray("-"), cs.gray("neutral")),
-                ("in_progress", _) => (cs.warning("*"), cs.warning("in_progress")),
-                ("queued", _) => (cs.gray("*"), cs.gray("queued")),
-                ("waiting", _) => (cs.gray("*"), cs.gray("waiting")),
-                _ => (status.to_string(), conclusion.to_string()),
+            let status_display = match status {
+                "in_progress" => cs.warning(status),
+                _ => cs.gray(status),
+            };
+
+            let conclusion_display = if conclusion.is_empty() {
+                String::new()
+            } else {
+                match conclusion {
+                    "success" => cs.success(conclusion),
+                    "failure" => cs.error(conclusion),
+                    _ => cs.gray(conclusion),
+                }
             };
 
             let elapsed = format_elapsed(created_at, updated_at);
-            let age = format_age(created_at);
+            let age = format_age(created_at, ios.is_stdout_tty());
 
             tp.add_row(vec![
-                symbol,
+                status_display,
                 conclusion_display,
                 cs.bold(display_title),
                 name.to_string(),
@@ -234,11 +237,19 @@ fn format_elapsed(start: &str, end: &str) -> String {
 }
 
 /// Format how long ago a timestamp was.
-fn format_age(timestamp: &str) -> String {
+///
+/// For TTY output, shows relative time (e.g. "about 2 hours ago").
+/// For non-TTY output, shows ISO 8601 timestamp with Z suffix.
+fn format_age(timestamp: &str, is_tty: bool) -> String {
     match chrono::DateTime::parse_from_rfc3339(timestamp) {
         Ok(dt) => {
-            let duration = chrono::Utc::now().signed_duration_since(dt);
-            ghc_core::text::fuzzy_ago(duration)
+            if is_tty {
+                let duration = chrono::Utc::now().signed_duration_since(dt);
+                ghc_core::text::fuzzy_ago(duration)
+            } else {
+                let utc: chrono::DateTime<chrono::Utc> = dt.into();
+                utc.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            }
         }
         Err(_) => timestamp.to_string(),
     }

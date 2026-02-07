@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::Value;
 
+use ghc_api::errors::ApiError;
 use ghc_core::table::TablePrinter;
 use ghc_core::{ios_eprintln, ios_println};
 
@@ -33,10 +34,16 @@ impl ListArgs {
         let client = factory.api_client("github.com")?;
         let ios = &factory.io;
 
-        let keys: Vec<Value> = client
-            .rest(reqwest::Method::GET, "user/keys", None)
-            .await
-            .context("failed to list SSH keys")?;
+        let keys: Vec<Value> = match client.rest(reqwest::Method::GET, "user/keys", None).await {
+            Ok(keys) => keys,
+            Err(ApiError::Http { status: 404, .. }) => {
+                anyhow::bail!(
+                    "insufficient OAuth scopes to list SSH keys\n\
+                     Run the following to grant scopes: ghc auth refresh -s admin:public_key"
+                );
+            }
+            Err(e) => return Err(e).context("failed to list SSH keys"),
+        };
 
         // JSON output
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
@@ -94,7 +101,7 @@ impl ListArgs {
 mod tests {
     use super::*;
 
-    use crate::test_helpers::{TestHarness, mock_rest_get};
+    use crate::test_helpers::{TestHarness, mock_rest_get, mock_rest_get_status};
 
     #[tokio::test]
     async fn test_should_list_ssh_keys() {
@@ -131,6 +138,35 @@ mod tests {
         assert!(
             stdout.contains("Home desktop"),
             "should contain second key title"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_should_show_scope_hint_on_404() {
+        let h = TestHarness::new().await;
+        mock_rest_get_status(
+            &h.server,
+            "/user/keys",
+            404,
+            serde_json::json!({"message": "Not Found"}),
+        )
+        .await;
+
+        let args = ListArgs {
+            json: vec![],
+            jq: None,
+            template: None,
+        };
+        let result = args.run(&h.factory).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("insufficient OAuth scopes"),
+            "should suggest scopes: {err}"
+        );
+        assert!(
+            err.contains("admin:public_key"),
+            "should suggest admin:public_key scope: {err}"
         );
     }
 }

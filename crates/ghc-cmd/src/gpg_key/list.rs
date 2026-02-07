@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::Value;
 
+use ghc_api::errors::ApiError;
 use ghc_core::table::TablePrinter;
 use ghc_core::{ios_eprintln, ios_println};
 
@@ -33,10 +34,19 @@ impl ListArgs {
         let client = factory.api_client("github.com")?;
         let ios = &factory.io;
 
-        let keys: Vec<Value> = client
+        let keys: Vec<Value> = match client
             .rest(reqwest::Method::GET, "user/gpg_keys", None)
             .await
-            .context("failed to list GPG keys")?;
+        {
+            Ok(keys) => keys,
+            Err(ApiError::Http { status: 404, .. }) => {
+                anyhow::bail!(
+                    "insufficient OAuth scopes to list GPG keys\n\
+                     Run the following to grant scopes: ghc auth refresh -s read:gpg_key"
+                );
+            }
+            Err(e) => return Err(e).context("failed to list GPG keys"),
+        };
 
         // JSON output
         if !self.json.is_empty() || self.jq.is_some() || self.template.is_some() {
@@ -96,7 +106,7 @@ impl ListArgs {
 mod tests {
     use super::*;
 
-    use crate::test_helpers::{TestHarness, mock_rest_get};
+    use crate::test_helpers::{TestHarness, mock_rest_get, mock_rest_get_status};
 
     #[tokio::test]
     async fn test_should_list_gpg_keys() {
@@ -125,5 +135,34 @@ mod tests {
         let stdout = h.stdout();
         assert!(stdout.contains("3AA5C34371567BD2"), "should contain key ID");
         assert!(stdout.contains("user@example.com"), "should contain email");
+    }
+
+    #[tokio::test]
+    async fn test_should_show_scope_hint_on_404() {
+        let h = TestHarness::new().await;
+        mock_rest_get_status(
+            &h.server,
+            "/user/gpg_keys",
+            404,
+            serde_json::json!({"message": "Not Found"}),
+        )
+        .await;
+
+        let args = ListArgs {
+            json: vec![],
+            jq: None,
+            template: None,
+        };
+        let result = args.run(&h.factory).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("insufficient OAuth scopes"),
+            "should suggest scopes: {err}"
+        );
+        assert!(
+            err.contains("read:gpg_key"),
+            "should suggest read:gpg_key scope: {err}"
+        );
     }
 }

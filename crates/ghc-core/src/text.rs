@@ -3,7 +3,7 @@
 //! Maps from Go's `internal/text` package.
 
 use base64::Engine;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 
 /// Truncate a string to a maximum display width, appending "..." if truncated.
 pub fn truncate(text: &str, max_width: usize) -> String {
@@ -53,12 +53,15 @@ pub fn fuzzy_ago(duration: chrono::Duration) -> String {
 }
 
 /// Format a timestamp for display based on whether output is a TTY.
+///
+/// For TTY output, returns a fuzzy relative time (e.g., "5 minutes ago").
+/// For non-TTY output, returns an ISO 8601 timestamp with `Z` suffix.
 pub fn relative_time_str(t: &DateTime<Utc>, is_tty: bool) -> String {
     if is_tty {
         let duration = Utc::now().signed_duration_since(*t);
         fuzzy_ago(duration)
     } else {
-        t.to_rfc3339()
+        t.to_rfc3339_opts(SecondsFormat::Secs, true)
     }
 }
 

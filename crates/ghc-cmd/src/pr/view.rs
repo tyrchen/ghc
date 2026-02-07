@@ -7,7 +7,6 @@ use clap::Args;
 use serde_json::Value;
 
 use ghc_core::ios_println;
-use ghc_core::text;
 
 /// View a pull request.
 #[derive(Debug, Args)]
@@ -109,100 +108,134 @@ impl ViewArgs {
         }
 
         let title = pr.get("title").and_then(Value::as_str).unwrap_or("");
-        let body = pr
-            .get("body")
-            .and_then(Value::as_str)
-            .unwrap_or("No description provided");
+        let body = pr.get("body").and_then(Value::as_str).unwrap_or("");
         let state = pr.get("state").and_then(Value::as_str).unwrap_or("OPEN");
         let is_draft = pr.get("isDraft").and_then(Value::as_bool).unwrap_or(false);
         let author = pr
             .pointer("/author/login")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
-        let head_ref = pr.get("headRefName").and_then(Value::as_str).unwrap_or("");
-        let base_ref = pr.get("baseRefName").and_then(Value::as_str).unwrap_or("");
-        let url = pr.get("url").and_then(Value::as_str).unwrap_or("");
         let additions = pr.get("additions").and_then(Value::as_i64).unwrap_or(0);
         let deletions = pr.get("deletions").and_then(Value::as_i64).unwrap_or(0);
-        let changed_files = pr.get("changedFiles").and_then(Value::as_i64).unwrap_or(0);
-        let review_decision = pr
-            .get("reviewDecision")
+
+        let labels: Vec<&str> = pr
+            .pointer("/labels/nodes")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|l| l.get("name").and_then(Value::as_str))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let assignees: Vec<&str> = pr
+            .pointer("/assignees/nodes")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| a.get("login").and_then(Value::as_str))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let reviewers: Vec<&str> = pr
+            .pointer("/reviewRequests/nodes")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| {
+                        r.pointer("/requestedReviewer/login")
+                            .or_else(|| r.pointer("/requestedReviewer/name"))
+                            .and_then(Value::as_str)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let projects: Vec<&str> = pr
+            .pointer("/projectCards/nodes")
+            .or_else(|| pr.pointer("/projectItems/nodes"))
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| p.pointer("/project/name").and_then(Value::as_str))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let milestone = pr
+            .pointer("/milestone/title")
             .and_then(Value::as_str)
             .unwrap_or("");
-        let comment_count = pr
-            .pointer("/comments/totalCount")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
 
-        // Title and state
-        let state_display = if is_draft {
-            cs.gray("Draft")
+        let url = pr.get("url").and_then(Value::as_str).unwrap_or("");
+        let auto_merge = if pr
+            .get("autoMergeRequest")
+            .filter(|v| !v.is_null())
+            .is_some()
+        {
+            "enabled"
         } else {
-            match state {
-                "OPEN" => cs.success("Open"),
-                "CLOSED" => cs.error("Closed"),
-                "MERGED" => cs.magenta("Merged"),
-                _ => state.to_string(),
-            }
+            "disabled"
         };
 
+        let state_display = if is_draft { "DRAFT" } else { state };
+
+        // Key-value output (matches gh CLI format)
+        ios_println!(ios, "title:\t{title}");
+        ios_println!(ios, "state:\t{state_display}");
+        ios_println!(ios, "author:\t{author}");
         ios_println!(
             ios,
-            "{} #{} {}\n",
-            cs.bold(title),
-            self.number,
-            state_display
+            "labels:\t{}",
+            if labels.is_empty() {
+                String::new()
+            } else {
+                labels.join(", ")
+            }
         );
         ios_println!(
             ios,
-            "{author} wants to merge into {base_ref} from {head_ref}\n"
-        );
-
-        // Labels
-        if let Some(labels) = pr.pointer("/labels/nodes").and_then(Value::as_array)
-            && !labels.is_empty()
-        {
-            let label_names: Vec<&str> = labels
-                .iter()
-                .filter_map(|l| l.get("name").and_then(Value::as_str))
-                .collect();
-            ios_println!(ios, "Labels: {}", label_names.join(", "));
-        }
-
-        // Review decision
-        if !review_decision.is_empty() {
-            let decision_display = match review_decision {
-                "APPROVED" => cs.success("Approved"),
-                "CHANGES_REQUESTED" => cs.warning("Changes requested"),
-                "REVIEW_REQUIRED" => cs.gray("Review required"),
-                _ => review_decision.to_string(),
-            };
-            ios_println!(ios, "Review: {decision_display}");
-        }
-
-        // Stats
-        ios_println!(
-            ios,
-            "Changes: {} {} in {} {}",
-            cs.success(&format!("+{additions}")),
-            cs.error(&format!("-{deletions}")),
-            changed_files,
-            text::pluralize(changed_files, "file", "files"),
+            "assignees:\t{}",
+            if assignees.is_empty() {
+                String::new()
+            } else {
+                assignees.join(", ")
+            }
         );
         ios_println!(
             ios,
-            "Comments: {}",
-            text::pluralize(comment_count, "comment", "comments"),
+            "reviewers:\t{}",
+            if reviewers.is_empty() {
+                String::new()
+            } else {
+                reviewers.join(", ")
+            }
         );
-
-        // Body
-        if !body.is_empty() {
-            ios_println!(ios, "\n---");
+        ios_println!(
+            ios,
+            "projects:\t{}",
+            if projects.is_empty() {
+                String::new()
+            } else {
+                projects.join(", ")
+            }
+        );
+        ios_println!(ios, "milestone:\t{milestone}");
+        ios_println!(ios, "number:\t{}", self.number);
+        ios_println!(ios, "url:\t{url}");
+        ios_println!(ios, "additions:\t{additions}");
+        ios_println!(ios, "deletions:\t{deletions}");
+        ios_println!(ios, "auto-merge:\t{auto_merge}");
+        ios_println!(ios, "--");
+        if body.is_empty() {
+            ios_println!(ios, "{}", cs.gray("No description provided."));
+        } else if ios.is_stdout_tty() {
             let rendered = ghc_core::markdown::render(body, ios.terminal_width());
             ios_println!(ios, "{rendered}");
+        } else {
+            ios_println!(ios, "{body}");
         }
-
-        ios_println!(ios, "\n{}", text::display_url(url));
 
         // Show comments if requested
         if self.comments {
@@ -423,10 +456,26 @@ mod tests {
 
         args.run(&h.factory).await.unwrap();
         let out = h.stdout();
-        assert!(out.contains("Add logging"), "should contain title: {out}");
-        assert!(out.contains("#42"), "should contain PR number: {out}");
-        assert!(out.contains("main"), "should contain base ref: {out}");
-        assert!(out.contains("+50"), "should contain additions: {out}");
+        assert!(
+            out.contains("title:\tAdd logging"),
+            "should contain key-value title: {out}"
+        );
+        assert!(
+            out.contains("state:\tOPEN"),
+            "should contain key-value state: {out}"
+        );
+        assert!(
+            out.contains("author:\ttestuser"),
+            "should contain key-value author: {out}"
+        );
+        assert!(
+            out.contains("additions:\t50"),
+            "should contain additions: {out}"
+        );
+        assert!(
+            out.contains("auto-merge:\tdisabled"),
+            "should contain auto-merge: {out}"
+        );
     }
 
     #[tokio::test]

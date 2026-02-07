@@ -309,11 +309,26 @@ impl IssuesArgs {
                 cs.error("closed")
             };
 
+            let labels: Vec<&str> = item
+                .get("labels")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|l| l.get("name").and_then(Value::as_str))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let label_display = labels.join(", ");
+
+            let updated_at = item.get("updated_at").and_then(Value::as_str).unwrap_or("");
+
             tp.add_row(vec![
                 cs.bold(&repo_display),
-                format!("#{number}"),
-                text::truncate(title, 60),
+                format!("{number}"),
                 state_display,
+                text::truncate(title, 60),
+                label_display,
+                updated_at.to_string(),
             ]);
         }
 
@@ -376,7 +391,9 @@ mod tests {
                     "number": 42,
                     "title": "Found Issue",
                     "state": "open",
-                    "repository_url": "https://api.github.com/repos/owner/repo"
+                    "repository_url": "https://api.github.com/repos/owner/repo",
+                    "labels": [{"name": "bug"}],
+                    "updated_at": "2024-01-15T10:00:00Z"
                 }
             ]
         })
@@ -391,8 +408,10 @@ mod tests {
         args.run(&h.factory).await.unwrap();
 
         let out = h.stdout();
-        assert!(out.contains("#42"), "should contain issue number");
+        assert!(out.contains("42"), "should contain issue number: {out}");
         assert!(out.contains("Found Issue"), "should contain issue title");
+        assert!(out.contains("bug"), "should contain label: {out}");
+        assert!(out.contains("2024-01-15"), "should contain date: {out}");
     }
 
     #[tokio::test]

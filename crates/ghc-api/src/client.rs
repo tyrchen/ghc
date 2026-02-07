@@ -437,6 +437,32 @@ impl Client {
         Ok(resp.bytes().await?.to_vec())
     }
 
+    /// Execute a REST API request with a custom Accept header.
+    ///
+    /// This is useful for endpoints that return different content based on
+    /// the Accept header, such as GitHub's text-match search results.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on network failure or non-success status.
+    pub async fn rest_with_accept<T: DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&Value>,
+        accept: &str,
+    ) -> Result<T, ApiError> {
+        let url = self.resolve_rest_url(path);
+        let mut req = self.authed_request(method, &url);
+        req = req.header("Accept", accept);
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        let resp = req.send().await?;
+        let resp = Self::check_response(resp, true).await?;
+        Ok(resp.json().await?)
+    }
+
     /// Check a response for errors and return an `ApiError::Http` if the
     /// status is not successful. The `include_scopes` flag controls whether
     /// OAuth scope suggestion headers are inspected.

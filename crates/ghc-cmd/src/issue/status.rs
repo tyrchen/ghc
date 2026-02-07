@@ -123,22 +123,27 @@ impl StatusArgs {
             .pointer("/assigned/issues/nodes")
             .and_then(Value::as_array);
 
-        ios_println!(ios, "{}", cs.bold("Issues assigned to you"),);
+        ios_println!(ios, "{}", cs.bold("Issues assigned to you"));
 
         if let Some(issues) = assigned_issues {
             if issues.is_empty() {
-                ios_println!(ios, "  {}", cs.gray("No issues match"));
+                ios_println!(ios, "  {}", cs.gray("There are no issues assigned to you"));
             } else {
                 let mut tp = TablePrinter::new(ios);
                 for issue in issues {
                     let number = issue.get("number").and_then(Value::as_i64).unwrap_or(0);
                     let title = issue.get("title").and_then(Value::as_str).unwrap_or("");
-                    tp.add_row(vec![format!("  #{number}"), text::truncate(title, 60)]);
+                    let updated_at = issue.get("updatedAt").and_then(Value::as_str).unwrap_or("");
+                    tp.add_row(vec![
+                        format!("  #{number}"),
+                        text::truncate(title, 60),
+                        updated_at.to_string(),
+                    ]);
                 }
                 ios_println!(ios, "{}", tp.render());
             }
         } else {
-            ios_println!(ios, "  {}", cs.gray("No issues match"));
+            ios_println!(ios, "  {}", cs.gray("There are no issues assigned to you"));
         }
 
         ios_println!(ios);
@@ -152,18 +157,23 @@ impl StatusArgs {
 
         if let Some(issues) = mentioned_issues {
             if issues.is_empty() {
-                ios_println!(ios, "  {}", cs.gray("No issues match"));
+                ios_println!(ios, "  {}", cs.gray("There are no issues mentioning you"));
             } else {
                 let mut tp = TablePrinter::new(ios);
                 for issue in issues {
                     let number = issue.get("number").and_then(Value::as_i64).unwrap_or(0);
                     let title = issue.get("title").and_then(Value::as_str).unwrap_or("");
-                    tp.add_row(vec![format!("  #{number}"), text::truncate(title, 60)]);
+                    let updated_at = issue.get("updatedAt").and_then(Value::as_str).unwrap_or("");
+                    tp.add_row(vec![
+                        format!("  #{number}"),
+                        text::truncate(title, 60),
+                        updated_at.to_string(),
+                    ]);
                 }
                 ios_println!(ios, "{}", tp.render());
             }
         } else {
-            ios_println!(ios, "  {}", cs.gray("No issues match"));
+            ios_println!(ios, "  {}", cs.gray("There are no issues mentioning you"));
         }
 
         ios_println!(ios);
@@ -177,18 +187,23 @@ impl StatusArgs {
 
         if let Some(issues) = authored_issues {
             if issues.is_empty() {
-                ios_println!(ios, "  {}", cs.gray("No issues match"));
+                ios_println!(ios, "  {}", cs.gray("There are no issues opened by you"));
             } else {
                 let mut tp = TablePrinter::new(ios);
                 for issue in issues {
                     let number = issue.get("number").and_then(Value::as_i64).unwrap_or(0);
                     let title = issue.get("title").and_then(Value::as_str).unwrap_or("");
-                    tp.add_row(vec![format!("  #{number}"), text::truncate(title, 60)]);
+                    let created_at = issue.get("createdAt").and_then(Value::as_str).unwrap_or("");
+                    tp.add_row(vec![
+                        format!("  #{number}"),
+                        text::truncate(title, 60),
+                        created_at.to_string(),
+                    ]);
                 }
                 ios_println!(ios, "{}", tp.render());
             }
         } else {
-            ios_println!(ios, "  {}", cs.gray("No issues match"));
+            ios_println!(ios, "  {}", cs.gray("There are no issues opened by you"));
         }
 
         Ok(())

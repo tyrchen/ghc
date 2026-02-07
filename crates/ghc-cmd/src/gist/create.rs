@@ -17,7 +17,7 @@ pub struct CreateArgs {
     files: Vec<String>,
 
     /// Description for the gist.
-    #[arg(short, long)]
+    #[arg(short, long, alias = "desc")]
     description: Option<String>,
 
     /// Create a public gist.

@@ -197,9 +197,9 @@ impl ListArgs {
             let created_at = issue.get("createdAt").and_then(Value::as_str).unwrap_or("");
 
             let state_display = if state == "OPEN" {
-                cs.success("Open")
+                cs.success("OPEN")
             } else {
-                cs.magenta("Closed")
+                cs.magenta("CLOSED")
             };
 
             let label_display = if labels.is_empty() {
@@ -214,10 +214,10 @@ impl ListArgs {
             );
 
             tp.add_row(vec![
-                format!("#{number}"),
+                format!("{number}"),
+                state_display,
                 text::truncate(title, 60),
                 label_display,
-                state_display,
                 time_display,
             ]);
         }
@@ -281,12 +281,16 @@ mod tests {
         args.run(&h.factory).await.unwrap();
 
         let out = h.stdout();
-        assert!(out.contains("#1"), "should contain issue number #1");
+        assert!(out.contains('1'), "should contain issue number 1");
         assert!(out.contains("Bug fix"), "should contain first issue title");
-        assert!(out.contains("#2"), "should contain issue number #2");
+        assert!(out.contains('2'), "should contain issue number 2");
         assert!(
             out.contains("Feature request"),
             "should contain second issue title"
+        );
+        assert!(
+            out.contains("OPEN"),
+            "should contain uppercase state: {out}"
         );
     }
 

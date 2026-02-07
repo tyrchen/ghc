@@ -134,9 +134,9 @@ impl ListArgs {
             tp.add_row(vec![
                 cs.bold(id),
                 desc,
-                visibility,
                 #[allow(clippy::cast_possible_wrap)]
                 text::pluralize(file_count as i64, "file", "files"),
+                visibility,
                 updated_at.to_string(),
             ]);
         }

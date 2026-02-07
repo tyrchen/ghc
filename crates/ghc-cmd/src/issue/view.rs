@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::Value;
 
-use ghc_core::text;
 use ghc_core::{ios_print, ios_println};
 
 /// View an issue.
@@ -108,38 +107,19 @@ impl ViewArgs {
             return Ok(());
         }
 
-        // Header
+        // Key-value output (matches gh CLI format)
         let title = issue
             .get("title")
             .and_then(Value::as_str)
             .unwrap_or("(no title)");
         let number = issue.get("number").and_then(Value::as_i64).unwrap_or(0);
         let state = issue.get("state").and_then(Value::as_str).unwrap_or("OPEN");
-
-        let state_display = if state == "OPEN" {
-            cs.success("Open")
-        } else {
-            cs.magenta("Closed")
-        };
-
-        ios_println!(ios, "{}", cs.bold(&format!("{title} #{number}")));
-        ios_println!(ios, "{state_display}");
-
-        // Author and timestamps
         let author = issue
             .pointer("/author/login")
             .and_then(Value::as_str)
             .unwrap_or("ghost");
-        let created_at = issue.get("createdAt").and_then(Value::as_str).unwrap_or("");
+        let body = issue.get("body").and_then(Value::as_str).unwrap_or("");
 
-        ios_println!(
-            ios,
-            "{} opened this issue {}",
-            cs.bold(author),
-            cs.gray(created_at),
-        );
-
-        // Labels
         let labels: Vec<&str> = issue
             .pointer("/labels/nodes")
             .and_then(Value::as_array)
@@ -150,11 +130,6 @@ impl ViewArgs {
             })
             .unwrap_or_default();
 
-        if !labels.is_empty() {
-            ios_println!(ios, "Labels: {}", labels.join(", "));
-        }
-
-        // Assignees
         let assignees: Vec<&str> = issue
             .pointer("/assignees/nodes")
             .and_then(Value::as_array)
@@ -165,48 +140,68 @@ impl ViewArgs {
             })
             .unwrap_or_default();
 
-        if !assignees.is_empty() {
-            ios_println!(ios, "Assignees: {}", assignees.join(", "));
-        }
+        let milestone = issue
+            .pointer("/milestone/title")
+            .and_then(Value::as_str)
+            .unwrap_or("");
 
-        // Body
-        let body = issue.get("body").and_then(Value::as_str).unwrap_or("");
-
-        if body.is_empty() {
-            ios_println!(ios, "\n{}", cs.gray("No description provided."));
-        } else {
-            ios_println!(ios);
-            if ios.is_stdout_tty() {
-                let rendered = ghc_core::markdown::render(body, ios.terminal_width());
-                ios_print!(ios, "{rendered}");
-            } else {
-                ios_println!(ios, "{body}");
-            }
-        }
-
-        // Comments summary
         let comment_count = issue
             .pointer("/comments/totalCount")
             .and_then(Value::as_i64)
             .unwrap_or(0);
 
-        if comment_count > 0 && !self.comments {
-            ios_println!(
-                ios,
-                "\n{}",
-                cs.gray(&format!(
-                    "{} {}. Use --comments to view.",
-                    comment_count,
-                    text::pluralize(comment_count, "comment", "comments"),
-                )),
-            );
-        }
+        let projects: Vec<&str> = issue
+            .pointer("/projectCards/nodes")
+            .or_else(|| issue.pointer("/projectItems/nodes"))
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| p.pointer("/project/name").and_then(Value::as_str))
+                    .collect()
+            })
+            .unwrap_or_default();
 
-        // URL
-        let url = issue.get("url").and_then(Value::as_str).unwrap_or("");
-
-        if !url.is_empty() {
-            ios_println!(ios, "\n{}", text::display_url(url));
+        ios_println!(ios, "title:\t{title}");
+        ios_println!(ios, "state:\t{state}");
+        ios_println!(ios, "author:\t{author}");
+        ios_println!(
+            ios,
+            "labels:\t{}",
+            if labels.is_empty() {
+                String::new()
+            } else {
+                labels.join(", ")
+            }
+        );
+        ios_println!(
+            ios,
+            "assignees:\t{}",
+            if assignees.is_empty() {
+                String::new()
+            } else {
+                assignees.join(", ")
+            }
+        );
+        ios_println!(ios, "comments:\t{comment_count}");
+        ios_println!(
+            ios,
+            "projects:\t{}",
+            if projects.is_empty() {
+                String::new()
+            } else {
+                projects.join(", ")
+            }
+        );
+        ios_println!(ios, "milestone:\t{milestone}");
+        ios_println!(ios, "number:\t{number}");
+        ios_println!(ios, "--");
+        if body.is_empty() {
+            ios_println!(ios, "{}", cs.gray("No description provided."));
+        } else if ios.is_stdout_tty() {
+            let rendered = ghc_core::markdown::render(body, ios.terminal_width());
+            ios_print!(ios, "{rendered}");
+        } else {
+            ios_println!(ios, "{body}");
         }
 
         // Show comments if requested
@@ -317,8 +312,18 @@ mod tests {
         args.run(&h.factory).await.unwrap();
 
         let out = h.stdout();
-        assert!(out.contains("Test Issue"), "should contain issue title");
-        assert!(out.contains("#42"), "should contain issue number");
+        assert!(
+            out.contains("title:\tTest Issue"),
+            "should contain key-value title: {out}"
+        );
+        assert!(
+            out.contains("state:\tOPEN"),
+            "should contain key-value state: {out}"
+        );
+        assert!(
+            out.contains("author:\ttestuser"),
+            "should contain key-value author: {out}"
+        );
         assert!(out.contains("Issue body text"), "should contain issue body");
     }
 

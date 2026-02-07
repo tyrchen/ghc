@@ -239,10 +239,7 @@ impl ListArgs {
             } else {
                 chrono::DateTime::parse_from_rfc3339(time_str).map_or_else(
                     |_| time_str.to_string(),
-                    |dt| {
-                        let duration = chrono::Utc::now().signed_duration_since(dt);
-                        text::fuzzy_ago(duration)
-                    },
+                    |dt| text::relative_time_str(&dt.into(), ios.is_stdout_tty()),
                 )
             };
 

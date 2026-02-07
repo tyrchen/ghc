@@ -132,6 +132,21 @@ pub async fn mock_rest_post(
         .await;
 }
 
+/// Mount a REST GET response mock that returns a specific status code with a JSON body.
+pub async fn mock_rest_get_status(
+    server: &MockServer,
+    url_path: &str,
+    status: u16,
+    response_body: serde_json::Value,
+) {
+    Mock::given(method("GET"))
+        .and(path(url_path))
+        .and(header("Authorization", "token ghp_test_token_123"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(response_body))
+        .mount(server)
+        .await;
+}
+
 /// Mount a REST DELETE response mock for a specific path.
 pub async fn mock_rest_delete(server: &MockServer, url_path: &str, status: u16) {
     Mock::given(method("DELETE"))

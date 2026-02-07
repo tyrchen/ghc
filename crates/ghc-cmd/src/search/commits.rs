@@ -7,7 +7,6 @@ use clap::Args;
 use serde_json::Value;
 
 use ghc_core::table::TablePrinter;
-use ghc_core::text;
 use ghc_core::{ios_eprintln, ios_println};
 
 /// Search for commits across GitHub.
@@ -119,26 +118,44 @@ impl CommitsArgs {
 
         for item in items {
             let sha = item.get("sha").and_then(Value::as_str).unwrap_or("");
-            let short_sha = if sha.len() >= 7 { &sha[..7] } else { sha };
             let message = item
                 .pointer("/commit/message")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let first_line = message.lines().next().unwrap_or("");
+            // Concatenate multi-line commit messages into a single line
+            let single_line: String = message
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
             let repo_name = item
                 .pointer("/repository/full_name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            // Prefer GitHub login username over commit author display name
+            let author = item
+                .pointer("/author/login")
+                .or_else(|| item.pointer("/commit/author/name"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
             let date = item
                 .pointer("/commit/author/date")
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            // Strip milliseconds but preserve original timezone offset
+            let date_display = if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(date) {
+                dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+            } else {
+                date.to_string()
+            };
 
             tp.add_row(vec![
                 cs.bold(repo_name),
-                cs.cyan(short_sha),
-                text::truncate(first_line, 60),
-                date.to_string(),
+                cs.cyan(sha),
+                single_line.clone(),
+                author.to_string(),
+                date_display,
             ]);
         }
 
@@ -173,11 +190,12 @@ mod tests {
             "total_count": 1,
             "items": [
                 {
-                    "sha": "abc1234567890",
+                    "sha": "abc1234567890def1234567890abc1234567890ab",
                     "commit": {
                         "message": "Fix critical bug\n\nDetailed description",
-                        "author": { "date": "2024-01-15T10:00:00Z" }
+                        "author": { "name": "Test Author", "date": "2024-01-15T10:00:00Z" }
                     },
+                    "author": { "login": "testauthor" },
                     "repository": { "full_name": "owner/repo" }
                 }
             ]
@@ -193,10 +211,17 @@ mod tests {
         args.run(&h.factory).await.unwrap();
 
         let out = h.stdout();
-        assert!(out.contains("abc1234"), "should contain short SHA");
+        assert!(
+            out.contains("abc1234567890def1234567890abc1234567890ab"),
+            "should contain full SHA: {out}"
+        );
         assert!(
             out.contains("Fix critical bug"),
             "should contain commit message first line"
+        );
+        assert!(
+            out.contains("testauthor"),
+            "should contain author login: {out}"
         );
     }
 

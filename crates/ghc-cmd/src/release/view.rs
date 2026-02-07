@@ -119,8 +119,6 @@ impl ViewArgs {
             return Ok(());
         }
 
-        let cs = ios.color_scheme();
-
         let title = release.get("name").and_then(Value::as_str).unwrap_or("");
         let tag_name = release
             .get("tagName")
@@ -143,11 +141,25 @@ impl ViewArgs {
             .or_else(|| release.get("published_at"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        let created_at = release
+            .get("createdAt")
+            .or_else(|| release.get("created_at"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let html_url = release
             .get("htmlUrl")
             .or_else(|| release.get("html_url"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        let author = release
+            .pointer("/author/login")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
+        let is_immutable = release
+            .get("immutable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         let assets = release
             .get("assets")
@@ -155,25 +167,19 @@ impl ViewArgs {
             .cloned()
             .unwrap_or_default();
 
-        ios_println!(ios, "{}", cs.bold(title));
-        ios_println!(ios, "Tag: {tag_name}");
-
-        if is_draft {
-            ios_println!(ios, "Status: {}", cs.warning("Draft"));
-        } else if is_prerelease {
-            ios_println!(ios, "Status: {}", cs.cyan("Pre-release"));
-        } else {
-            ios_println!(ios, "Status: {}", cs.success("Published"));
-        }
-
-        ios_println!(ios, "Published: {published_at}");
-
-        if !body.is_empty() {
-            ios_println!(ios, "\n{body}");
-        }
+        // Key-value output (matches gh CLI format)
+        ios_println!(ios, "title:\t{title}");
+        ios_println!(ios, "tag:\t{tag_name}");
+        ios_println!(ios, "draft:\t{is_draft}");
+        ios_println!(ios, "prerelease:\t{is_prerelease}");
+        ios_println!(ios, "author:\t{author}");
+        ios_println!(ios, "created:\t{created_at}");
+        ios_println!(ios, "published:\t{published_at}");
+        ios_println!(ios, "immutable:\t{is_immutable}");
+        ios_println!(ios, "url:\t{html_url}");
 
         if !assets.is_empty() {
-            ios_println!(ios, "\nAssets:");
+            ios_println!(ios, "assets:");
             for asset in &assets {
                 let name = asset
                     .get("name")
@@ -184,7 +190,12 @@ impl ViewArgs {
             }
         }
 
-        ios_println!(ios, "\n{}", ghc_core::text::display_url(html_url));
+        ios_println!(ios, "--");
+        if body.is_empty() {
+            ios_println!(ios, "No release notes.");
+        } else {
+            ios_println!(ios, "{body}");
+        }
 
         Ok(())
     }
@@ -228,11 +239,24 @@ mod tests {
         args.run(&h.factory).await.unwrap();
 
         let out = h.stdout();
-        assert!(out.contains("Release 1.0"));
-        assert!(out.contains("v1.0.0"));
+        assert!(
+            out.contains("title:\tRelease 1.0"),
+            "should contain key-value title: {out}"
+        );
+        assert!(
+            out.contains("tag:\tv1.0.0"),
+            "should contain key-value tag: {out}"
+        );
+        assert!(
+            out.contains("draft:\tfalse"),
+            "should contain draft status: {out}"
+        );
+        assert!(
+            out.contains("prerelease:\tfalse"),
+            "should contain prerelease status: {out}"
+        );
         assert!(out.contains("Release notes here"));
         assert!(out.contains("binary.tar.gz"));
-        assert!(out.contains("Published"));
     }
 
     #[tokio::test]

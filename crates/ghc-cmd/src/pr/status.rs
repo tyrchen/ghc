@@ -139,8 +139,12 @@ impl StatusArgs {
             return Ok(());
         }
 
-        // Current branch section
-        ios_println!(ios, "\n{}", cs.bold("Current branch"));
+        // Relevant pull requests section
+        ios_println!(
+            ios,
+            "\n{}",
+            cs.bold(&format!("Relevant pull requests in {}", repo.full_name())),
+        );
         if head_ref_name.is_empty() {
             ios_println!(ios, "  There is no current branch");
         } else {
@@ -153,33 +157,12 @@ impl StatusArgs {
                 Some(pr) => {
                     let number = pr.get("number").and_then(Value::as_i64).unwrap_or(0);
                     let title = pr.get("title").and_then(Value::as_str).unwrap_or("");
-                    let state = pr.get("state").and_then(Value::as_str).unwrap_or("OPEN");
-                    let is_draft = pr.get("isDraft").and_then(Value::as_bool).unwrap_or(false);
-                    let review_decision = pr
-                        .get("reviewDecision")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-
-                    let status_icon = if is_draft {
-                        cs.gray("o")
-                    } else {
-                        match state {
-                            "MERGED" => cs.magenta("*"),
-                            "CLOSED" => cs.error("x"),
-                            _ => match review_decision {
-                                "APPROVED" => cs.success_icon(),
-                                "CHANGES_REQUESTED" => cs.warning_icon(),
-                                _ => cs.success("o"),
-                            },
-                        }
-                    };
 
                     let mut tp = TablePrinter::new(ios);
                     tp.add_row(vec![
-                        status_icon,
-                        cs.bold(&format!("#{number}")),
+                        format!("  {}", cs.bold(&format!("#{number}"))),
                         text::truncate(title, 50),
-                        cs.gray(&head_ref_name),
+                        cs.gray(&format!("[{head_ref_name}]")),
                     ]);
                     ios_println!(ios, "{}", tp.render());
                 }
@@ -206,27 +189,11 @@ impl StatusArgs {
                     let number = pr.get("number").and_then(Value::as_i64).unwrap_or(0);
                     let title = pr.get("title").and_then(Value::as_str).unwrap_or("");
                     let head_ref = pr.get("headRefName").and_then(Value::as_str).unwrap_or("");
-                    let is_draft = pr.get("isDraft").and_then(Value::as_bool).unwrap_or(false);
-                    let review_decision = pr
-                        .get("reviewDecision")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-
-                    let status_icon = if is_draft {
-                        cs.gray("o")
-                    } else {
-                        match review_decision {
-                            "APPROVED" => cs.success_icon(),
-                            "CHANGES_REQUESTED" => cs.warning_icon(),
-                            _ => cs.success("o"),
-                        }
-                    };
 
                     tp.add_row(vec![
-                        status_icon,
-                        cs.bold(&format!("#{number}")),
+                        format!("  {}", cs.bold(&format!("#{number}"))),
                         text::truncate(title, 50),
-                        cs.gray(head_ref),
+                        cs.gray(&format!("[{head_ref}]")),
                     ]);
                 }
                 ios_println!(ios, "{}", tp.render());
@@ -252,17 +219,15 @@ impl StatusArgs {
                     let head_ref = pr.get("headRefName").and_then(Value::as_str).unwrap_or("");
 
                     tp.add_row(vec![
-                        cs.warning("!"),
-                        cs.bold(&format!("#{number}")),
+                        format!("  {}", cs.bold(&format!("#{number}"))),
                         text::truncate(title, 50),
-                        cs.gray(head_ref),
+                        cs.gray(&format!("[{head_ref}]")),
                     ]);
                 }
-
                 ios_println!(ios, "{}", tp.render());
             }
             _ => {
-                ios_println!(ios, "  No pull requests requesting your review");
+                ios_println!(ios, "  You have no pull requests to review");
             }
         }
 
@@ -341,8 +306,8 @@ mod tests {
         args.run(&h.factory).await.unwrap();
         let out = h.stdout();
         assert!(
-            out.contains("Current branch"),
-            "should show current branch section: {out}"
+            out.contains("Relevant pull requests in owner/repo"),
+            "should show relevant PRs section: {out}"
         );
         assert!(
             out.contains("Created by you"),

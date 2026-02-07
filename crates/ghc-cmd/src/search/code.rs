@@ -89,7 +89,12 @@ impl CodeArgs {
         let path = format!("search/code?q={encoded}&per_page={}", self.limit.min(100),);
 
         let result: Value = client
-            .rest(reqwest::Method::GET, &path, None)
+            .rest_with_accept(
+                reqwest::Method::GET,
+                &path,
+                None,
+                "application/vnd.github.text-match+json",
+            )
             .await
             .context("failed to search code")?;
 
@@ -127,7 +132,23 @@ impl CodeArgs {
                 .unwrap_or("");
             let file_path = item.get("path").and_then(Value::as_str).unwrap_or("");
 
-            tp.add_row(vec![cs.bold(repo_name), file_path.to_string()]);
+            // Extract matched line content from text_matches
+            let matched_text = item
+                .get("text_matches")
+                .and_then(Value::as_array)
+                .and_then(|matches| {
+                    matches.first().and_then(|m| {
+                        m.get("fragment")
+                            .and_then(Value::as_str)
+                            .map(|f| f.lines().next().unwrap_or("").to_string())
+                    })
+                })
+                .unwrap_or_default();
+
+            tp.add_row(vec![
+                format!("{}:{}", cs.bold(repo_name), file_path),
+                matched_text,
+            ]);
         }
 
         let output = tp.render();
@@ -163,7 +184,12 @@ mod tests {
             "items": [
                 {
                     "path": "src/main.rs",
-                    "repository": { "full_name": "owner/repo" }
+                    "repository": { "full_name": "owner/repo" },
+                    "text_matches": [
+                        {
+                            "fragment": "fn main() {\n    println!(\"Hello\");\n}"
+                        }
+                    ]
                 }
             ]
         })
@@ -180,6 +206,10 @@ mod tests {
         let out = h.stdout();
         assert!(out.contains("owner/repo"), "should contain repo name");
         assert!(out.contains("src/main.rs"), "should contain file path");
+        assert!(
+            out.contains("fn main()"),
+            "should contain matched text: {out}"
+        );
     }
 
     #[tokio::test]

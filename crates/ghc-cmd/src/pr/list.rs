@@ -209,11 +209,10 @@ impl ListArgs {
             );
 
             tp.add_row(vec![
-                cs.bold(&format!("#{number}")),
+                format!("{number}"),
                 text::truncate(title, 60),
                 head_ref.to_string(),
                 state_display,
-                author.to_string(),
                 time_display,
             ]);
         }
@@ -257,9 +256,13 @@ mod tests {
 
         args.run(&h.factory).await.unwrap();
         let out = h.stdout();
-        assert!(out.contains("#1"), "should contain PR #1: {out}");
-        assert!(out.contains("#2"), "should contain PR #2: {out}");
+        assert!(out.contains('1'), "should contain PR 1: {out}");
+        assert!(out.contains('2'), "should contain PR 2: {out}");
         assert!(out.contains("Fix bug"), "should contain title: {out}");
+        assert!(
+            out.contains("OPEN"),
+            "should contain uppercase state: {out}"
+        );
     }
 
     #[tokio::test]
