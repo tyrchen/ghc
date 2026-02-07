@@ -128,13 +128,21 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env("GH_DEBUG").unwrap_or_else(|_| EnvFilter::new("warn")),
-        )
-        .with_target(false)
-        .init();
+    // Initialize tracing: only enable when GH_DEBUG is set (matching gh behavior).
+    // GH_DEBUG=1 or GH_DEBUG=api enables debug-level output on stderr.
+    let gh_debug = std::env::var("GH_DEBUG").unwrap_or_default();
+    if !gh_debug.is_empty() {
+        let filter = if gh_debug == "api" {
+            EnvFilter::new("ghc_api=debug")
+        } else {
+            EnvFilter::try_new(&gh_debug).unwrap_or_else(|_| EnvFilter::new("debug"))
+        };
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .with_writer(std::io::stderr)
+            .init();
+    }
 
     let cli = Cli::parse();
 
