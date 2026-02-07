@@ -2,16 +2,21 @@
 
 # ghc - GitHub CLI in Rust
 
-A fast, native Rust implementation of the [GitHub CLI](https://cli.github.com/) (`gh`). Drop-in replacement with 92%+ feature parity and the same command-line interface you already know.
+A fast, native Rust implementation of the [GitHub CLI](https://cli.github.com/) (`gh`). Drop-in replacement with the same command-line interface you already know.
 
 ## Why ghc?
 
 - **Fast** - Native binary compiled with Rust, no runtime overhead
 - **Compatible** - Same commands, same flags, same output format as `gh`
-- **Secure** - Built with `rustls` TLS, `secrecy` for token handling, no `unsafe` code
+- **Secure** - Built with `rustls` TLS, `secrecy` for token handling, keyring integration for secure token storage
 - **Extensible** - Modular crate architecture for embedding in other Rust projects
 
 ## Installation
+
+### Prerequisites
+
+- Rust toolchain (stable, 2024 edition). See [rust-toolchain.toml](rust-toolchain.toml) for the pinned version.
+- An existing `gh` configuration (ghc reads `~/.config/gh/config.yml` and `~/.config/gh/hosts.yml`)
 
 ### From source
 
@@ -33,6 +38,9 @@ cargo build --release
 ghc reads your existing `gh` configuration, so if you already have `gh` set up, just start using `ghc`:
 
 ```bash
+# Authenticate (or reuse existing gh config)
+ghc auth login
+
 # List your repositories
 ghc repo list
 
@@ -40,7 +48,7 @@ ghc repo list
 ghc issue view 42 -R owner/repo
 
 # Create a pull request
-ghc pr create --title "My PR" --body "Description"
+ghc pr create -R owner/repo --title "My PR" --body "Description"
 
 # Search across GitHub
 ghc search repos "rust cli" --limit 5
@@ -49,11 +57,38 @@ ghc search repos "rust cli" --limit 5
 ghc api repos/owner/repo --jq '.name'
 ```
 
+## Feature Parity
+
+ghc implements **100% of gh's command groups** (25/25) and **98% of subcommands** (145/148).
+
+### CLI-to-CLI Output Parity
+
+Tested against `gh` v2.86.0 across 23 diff comparisons:
+
+| Result | Count | Details |
+|--------|-------|---------|
+| Identical | 22 | Byte-identical output to gh |
+| Minor diff | 1 | Label sort order |
+
+### Command Coverage
+
+| Metric | Coverage |
+|--------|----------|
+| Command groups | 25/25 (100%) |
+| Subcommands | 145/148 (98%) |
+| Flag coverage | ~85% |
+
+### Known Gaps
+
+- `--repo`/`-R` is currently required (gh auto-detects from git context)
+- 12 commands have `-h` short flag conflicts (commands work, `--help` panics)
+- Some search/codespace/attestation flags are not yet implemented
+
+See [docs/feature-parity-report.md](docs/feature-parity-report.md) for the full parity analysis.
+
 ## Supported Commands
 
-ghc implements the full gh CLI command set across 33 command groups:
-
-### Core Commands (Full Parity)
+### Core Commands
 
 | Command Group | Description | Key Operations |
 |---------------|-------------|----------------|
@@ -61,24 +96,30 @@ ghc implements the full gh CLI command set across 33 command groups:
 | `issue` | Issue management | `create`, `list`, `view`, `close`, `reopen`, `comment`, `edit`, `lock`, `unlock`, `status` |
 | `pr` | Pull request workflows | `create`, `list`, `view`, `merge`, `close`, `comment`, `review`, `diff`, `checks`, `status` |
 | `gist` | Gist management | `create`, `list`, `view`, `edit`, `delete`, `clone`, `rename` |
-| `release` | Release management | `create`, `list`, `view`, `delete`, `upload`, `download` |
-| `label` | Label management | `create`, `list`, `edit`, `delete` |
-| `secret` | Repository/org secrets | `set`, `list`, `delete` |
-| `variable` | Repository/org variables | `set`, `list`, `get`, `delete` |
-| `workflow` | Workflow management | `list`, `view`, `enable`, `disable`, `run` |
-| `run` | Workflow run management | `list`, `view`, `watch`, `rerun`, `cancel`, `download` |
+| `release` | Release management | `create`, `list`, `view`, `delete`, `upload`, `download`, `edit` |
+| `label` | Label management | `create`, `list`, `edit`, `delete`, `clone` |
 | `search` | GitHub search | `repos`, `issues`, `prs`, `commits`, `code` |
-| `api` | Direct API access | REST + GraphQL, `--jq`, `--template`, pagination |
+| `api` | Direct API access | REST + GraphQL, `--jq`, pagination |
 
 ### Configuration & Auth
 
 | Command Group | Description |
 |---------------|-------------|
-| `auth` | Authentication (`login`, `logout`, `status`, `token`, `switch`) |
+| `auth` | Authentication (`login`, `logout`, `status`, `token`, `switch`, `refresh`, `setup-git`) |
 | `config` | Configuration (`list`, `get`, `set`, `clear-cache`) |
 | `alias` | Command aliases (`set`, `list`, `delete`, `import`) |
 | `ssh-key` | SSH key management (`list`, `add`, `delete`) |
 | `gpg-key` | GPG key management (`list`, `add`, `delete`) |
+
+### CI/CD & Automation
+
+| Command Group | Description |
+|---------------|-------------|
+| `run` | Workflow run management (`list`, `view`, `watch`, `rerun`, `cancel`, `download`) |
+| `workflow` | Workflow management (`list`, `view`, `enable`, `disable`, `run`) |
+| `cache` | GitHub Actions cache management (`list`, `delete`) |
+| `secret` | Repository/org secrets (`set`, `list`, `delete`) |
+| `variable` | Repository/org variables (`set`, `list`, `get`, `delete`) |
 
 ### Additional Commands
 
@@ -89,9 +130,10 @@ ghc implements the full gh CLI command set across 33 command groups:
 | `codespace` | Codespaces management |
 | `project` | GitHub Projects (v2) |
 | `org` | Organization operations |
-| `cache` | GitHub Actions cache management |
 | `ruleset` | Repository rulesets |
 | `attestation` | Artifact attestations |
+| `copilot` | GitHub Copilot integration |
+| `extension` | Extension management |
 | `completion` | Shell completion scripts |
 
 ## Output Formatting
@@ -100,28 +142,14 @@ ghc supports the same output formatting flags as `gh`:
 
 ```bash
 # JSON output with field selection
-ghc issue list --json number,title,state
+ghc issue list -R owner/repo --json number,title,state
 
 # jq filtering (powered by jaq)
-ghc pr list --json title --jq '.[].title'
+ghc pr list -R owner/repo --json title --jq '.[].title'
 
 # Go template formatting
 ghc repo list --json name,url --template '{{range .}}{{.name}}: {{.url}}{{"\n"}}{{end}}'
 ```
-
-## Feature Parity
-
-Tested against `gh` v2.86.0 with 64 real-world scenarios:
-
-| Result | Count | Details |
-|--------|-------|---------|
-| PASS   | 59    | Identical output to gh |
-| DIFF   | 5     | Minor cosmetic differences |
-| FAIL   | 0     | No failures |
-
-**Pass rate: 92% exact match, 0% failure**
-
-See [docs/cli-parity-test-report.md](docs/cli-parity-test-report.md) for the full test matrix.
 
 ## Architecture
 
@@ -131,10 +159,10 @@ ghc is structured as a Rust workspace with five crates:
 ghc/
   crates/
     ghc/          # Binary entry point
-    ghc-cmd/      # All CLI command implementations (33 groups, 370+ tests)
-    ghc-core/     # Shared types: config, auth, IOStreams, JSON/jq/template (350+ tests)
+    ghc-cmd/      # All CLI command implementations (25 groups, 376+ tests)
+    ghc-core/     # Shared types: config, auth, IOStreams, JSON/jq/template
     ghc-api/      # HTTP client for GitHub REST & GraphQL APIs
-    ghc-git/      # Git operations (clone, push, credential helpers) (100+ tests)
+    ghc-git/      # Git operations (clone, push, credential helpers, 108+ tests)
 ```
 
 ### Key Dependencies
@@ -145,24 +173,45 @@ ghc/
 | `reqwest` + `rustls` | HTTP client with pure-Rust TLS |
 | `jaq-*` | Full jq expression support |
 | `secrecy` | Secure token handling |
+| `keyring` | OS keyring integration for secure token storage |
 | `tokio` | Async runtime |
 | `serde` / `serde_json` | Serialization |
 
 ## Development
 
+### Build & Test
+
 ```bash
 # Build
 cargo build
 
-# Run tests (900+ tests)
+# Run all tests
 cargo test --all
+
+# Run with stricter checks
+make check  # fmt + clippy + unit tests
 
 # Lint
 cargo clippy --all-targets --all-features -- -D warnings
 
-# Format
+# Format (requires nightly)
 cargo +nightly fmt --all
+
+# Install locally
+cargo install --path crates/ghc
 ```
+
+### Makefile Targets
+
+| Target | Description |
+|--------|-------------|
+| `make build` | Build the project |
+| `make test` | Run all tests with nextest |
+| `make test-unit` | Run unit tests for all crates |
+| `make test-clippy` | Run clippy lints |
+| `make test-fmt` | Check formatting |
+| `make check` | Run fmt + clippy + unit tests |
+| `make release` | Tag and release |
 
 ## Configuration
 
@@ -171,7 +220,21 @@ ghc uses the same configuration files as `gh`:
 - `~/.config/gh/config.yml` - General settings
 - `~/.config/gh/hosts.yml` - Authentication tokens
 
-All 11 configuration keys are supported:
+### Token Storage
+
+By default, `ghc auth login` stores tokens in the OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service). Use `--insecure-storage` to store tokens in the config file instead.
+
+```bash
+# Default: secure keyring storage
+ghc auth login
+
+# Fallback: config file storage
+ghc auth login --insecure-storage
+```
+
+### Configuration Keys
+
+All 11 configuration keys from gh are supported:
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -186,6 +249,12 @@ All 11 configuration keys are supported:
 | `accessible_colors` | `disabled` | 4-bit accessible colors |
 | `accessible_prompter` | `disabled` | Accessible prompts |
 | `spinner` | `enabled` | Animated spinner indicator |
+
+## Documentation
+
+- [Feature Parity Report](docs/feature-parity-report.md) - Full CLI-to-CLI parity analysis
+- [Architecture Review](docs/architecture-review.md) - Workspace architecture review
+- [CLI Parity Test Report](docs/cli-parity-test-report.md) - Detailed test results
 
 ## License
 
